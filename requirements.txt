@@ -1,0 +1,6 @@
+qiskit>=1.0.0
+qiskit-aer>=0.14.0
+numpy>=1.26.0
+scipy>=1.11.0
+scikit-learn>=1.4.0
+pytest>=8.0.0
