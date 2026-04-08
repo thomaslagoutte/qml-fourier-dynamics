@@ -267,3 +267,79 @@ class CircuitBuilder:
         lcu_qc.append(lcu_prep.inverse(), qr_lcu)
         
         return lcu_qc
+    
+    def build_lgt_trotter_extraction_circuit(self, num_matter_sites: int, x_state: str, mass: float, electric_field: float, tau: float, r_steps: int):
+        """
+        Constructs the A(U) Fourier extraction circuit specifically for the Z2 LGT.
+        x_state: A binary string representing the initial computational basis state.
+        """
+        from qiskit import QuantumCircuit, QuantumRegister
+        import math
+        
+        num_gauge_links = num_matter_sites - 1
+        num_data_qubits = num_matter_sites + num_gauge_links
+        num_params = num_gauge_links
+        
+        dim_freq = 2**math.ceil(math.log2(2 * r_steps + 1))
+        num_freq_qubits = dim_freq.bit_length() - 1
+        
+        qr_data = QuantumRegister(num_data_qubits, 'data')
+        qr_ancilla = QuantumRegister(1, 'ancilla')
+        qr_freqs = [QuantumRegister(num_freq_qubits, f'freq_{i}') for i in range(num_params)]
+        
+        qc = QuantumCircuit(qr_data, qr_ancilla, *qr_freqs)
+        
+        # Qiskit is little-endian, so we reverse the string to match logical indices
+        for i, bit in enumerate(reversed(x_state)):
+            if bit == '1':
+                qc.x(qr_data[i])
+
+        # Helper to apply the BRGD25 subroutine with dynamic basis changes
+        def apply_pauli_extraction(pauli_string, target_freq_reg):
+            # 1. Basis change to Z
+            for i, p in enumerate(reversed(pauli_string)):
+                if p == 'X':
+                    qc.h(qr_data[i])
+            
+            # 2. Compute Parity
+            active_qubits = [qr_data[i] for i, p in enumerate(reversed(pauli_string)) if p in ['X', 'Z']]
+            for q in active_qubits:
+                qc.cx(q, qr_ancilla[0])
+                
+            # 3. Frequency Shift (V_+ / V_-)
+            v_plus = self._build_V_plus_gate(num_freq_qubits)
+            v_minus = self._build_V_minus_gate(num_freq_qubits)
+            qc.append(v_plus.control(1, ctrl_state='0'), [qr_ancilla[0]] + list(target_freq_reg))
+            qc.append(v_minus.control(1, ctrl_state='1'), [qr_ancilla[0]] + list(target_freq_reg))
+            
+            # 4. Uncompute Parity
+            for q in reversed(active_qubits):
+                qc.cx(q, qr_ancilla[0])
+                
+            # 5. Undo Basis change
+            for i, p in enumerate(reversed(pauli_string)):
+                if p == 'X':
+                    qc.h(qr_data[i])
+
+        dt = tau / r_steps
+        
+        for step in range(r_steps):
+            # A. Fixed Term: Matter Mass (Z)
+            for i in range(num_matter_sites):
+                qc.rz(2 * mass * dt, qr_data[2*i])
+            
+            # B. Fixed Term: Electric Field (X)
+            for i in range(num_gauge_links):
+                qc.rx(2 * electric_field * dt, qr_data[2*i + 1])
+                
+            # C. Parametrized Terms: Matter-Gauge Interaction (X_i Z_{i,i+1} X_{i+1})
+            for i in range(num_gauge_links):
+                pauli_chars = ['I'] * num_data_qubits
+                pauli_chars[2*i] = 'X'
+                pauli_chars[2*i+1] = 'Z'
+                pauli_chars[2*i+2] = 'X'
+                pauli_str = "".join(pauli_chars)[::-1]
+                
+                apply_pauli_extraction(pauli_str, qr_freqs[i])
+                
+        return qc, qr_freqs
