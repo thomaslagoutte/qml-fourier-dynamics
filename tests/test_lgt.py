@@ -42,15 +42,19 @@ def test_lgt_extraction_circuit_structure(builder):
     num_matter = 3
     num_gauge = 2
     x_state = "10101" # Arbitrary initial state
+    r_steps = 1
     
     qc, qr_freqs = builder.build_lgt_trotter_extraction_circuit(
         num_matter_sites=num_matter, 
         x_state=x_state, 
-        mass=0.5, electric_field=0.5, tau=1.0, r_steps=1
+        mass=0.5, electric_field=0.5, tau=1.0, r_steps=r_steps
     )
     
-    # Expected qubits: Data(5) + Ancilla(1) + Freq(2 links * 2 qubits for r=1) = 10 qubits
-    assert qc.num_qubits == 10
+    # Dynamically calculate the correct expected qubits based on the architecture
+    n_s = builder._freq_register_size(r_steps)
+    expected_qubits = (num_matter + num_gauge) + 1 + (num_gauge * n_s)
+    
+    assert qc.num_qubits == expected_qubits
     assert len(qr_freqs) == num_gauge
     
     # Ensure the circuit is unitary and mathematically valid

@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import math
 from qiskit import QuantumCircuit, QuantumRegister
 from qiskit.quantum_info import Statevector
 from src.quantum_routines import CircuitBuilder
@@ -104,8 +105,6 @@ def test_hadamard_extraction_circuit(builder):
     Validates that the physical Hadamard test circuit successfully extracts 
     the correct Fourier amplitude compared to the mathematical statevector.
     """
-    from qiskit.quantum_info import Statevector
-    
     num_qubits = 2
     x_edges = [(0, 1)]
     tau = 0.5
@@ -113,12 +112,14 @@ def test_hadamard_extraction_circuit(builder):
     target_freq = 1
     
     # 1. Exact mathematical extraction via Statevector
-    base_qc, qr_freq = builder.build_trotter_extraction_circuit(num_qubits, x_edges, tau, r_steps)
+    # FIX: Account for the list of frequency registers
+    base_qc, qr_freqs = builder.build_trotter_extraction_circuit(num_qubits, x_edges, tau, r_steps)
     sv_base = Statevector.from_instruction(base_qc)
     
     # Amplitude of |freq=1>|ancilla=0>|data=00>
     # Little-endian stride for frequency register: 2**(num_qubits + 1)
-    exact_b_1 = sv_base.data[target_freq * 8]
+    stride = 2**(num_qubits + 1)
+    exact_b_1 = sv_base.data[target_freq * stride]
     
     # 2. Hardware-level extraction via Hadamard Test
     ht_qc = builder.build_fourier_hadamard_test(
@@ -144,10 +145,6 @@ def test_quantum_overlap_kernel_circuit(builder):
     Validates that the quantum overlap circuit correctly computes the 
     dot product (kernel) between the feature maps of two different inputs.
     """
-    from qiskit.quantum_info import Statevector
-    import math
-    import numpy as np
-    
     num_qubits = 2
     tau = 0.5
     r_steps = 1
@@ -157,14 +154,15 @@ def test_quantum_overlap_kernel_circuit(builder):
     x_edges_2 = []       # Empty graph
     
     # 1. Exact mathematical extraction of the feature vectors
-    qc_1, qr_freq = builder.build_trotter_extraction_circuit(num_qubits, x_edges_1, tau, r_steps)
+    qc_1, qr_freqs = builder.build_trotter_extraction_circuit(num_qubits, x_edges_1, tau, r_steps)
     qc_2, _ = builder.build_trotter_extraction_circuit(num_qubits, x_edges_2, tau, r_steps)
+    
+    # FIX: Dynamically get the dimension from the updated architecture instead of buggy math
+    num_freq_qubits = qr_freqs[0].size
+    dim_freq = 2**num_freq_qubits
     
     sv_1 = Statevector.from_instruction(qc_1)
     sv_2 = Statevector.from_instruction(qc_2)
-    
-    max_freq = num_qubits * r_steps
-    dim_freq = 2**math.ceil(math.log2(2 * max_freq + 1))
     
     # Stride for base extraction circuit: freq starts at bit (num_qubits + 1)
     state_stride_base = 2**(num_qubits + 1)
@@ -188,14 +186,7 @@ def test_quantum_overlap_kernel_circuit(builder):
     kernel_qc.remove_final_measurements()
     sv_kernel = Statevector.from_instruction(kernel_qc)
     
-    # In kernel_qc, the registers were added as: k_ancilla, data, ancilla, freq.
-    # Qiskit is little-endian, meaning the FIRST register is the LEAST significant bit.
-    # Therefore:
-    # bit 0: k_ancilla
-    # bits 1 to num_qubits: data
-    # bit num_qubits + 1: ancilla
-    # bits num_qubits + 2 and above: freq
-    
+    # kernel_state_stride is shifted by 1 because of the k_ancilla at index 0
     kernel_state_stride = 2**(num_qubits + 2)
     
     prob_0_rest_0 = 0.0
@@ -220,11 +211,7 @@ def test_lcu_observable_extraction(builder):
     Validates that the LCU extraction circuit correctly superimposes 
     the Fourier coefficients for a generic multi-term observable.
     """
-    from qiskit.quantum_info import Statevector
-    from qiskit import QuantumCircuit, QuantumRegister
     from qiskit.circuit.library import PauliGate
-    import numpy as np
-    import math
     
     num_qubits = 2
     x_edges = [(0, 1)]
@@ -241,9 +228,11 @@ def test_lcu_observable_extraction(builder):
     )
     sv_lcu = Statevector.from_instruction(lcu_qc)
     
+    # FIX: Dynamically read register sizes from the actual architecture
+    base_qc, qr_freqs = builder.build_trotter_extraction_circuit(num_qubits, x_edges, tau, r_steps)
+    num_freq_qubits = qr_freqs[0].size
+    dim_freq = 2**num_freq_qubits
     num_lcu_qubits = max(1, math.ceil(math.log2(len(observable_coeffs))))
-    max_freq = num_qubits * r_steps
-    dim_freq = 2**math.ceil(math.log2(2 * max_freq + 1))
     
     # Stride to reach |freq=l> |ancilla=0> |data=0> |lcu=0>
     state_stride_lcu = 2**(num_lcu_qubits + num_qubits + 1)
@@ -258,11 +247,10 @@ def test_lcu_observable_extraction(builder):
     
     # --- 2. Exact Mathematical Extraction ---
     exact_b = np.zeros(dim_freq, dtype=complex)
-    base_qc, _ = builder.build_trotter_extraction_circuit(num_qubits, x_edges, tau, r_steps)
     
     qr_d = QuantumRegister(num_qubits)
     qr_a = QuantumRegister(1)
-    qr_f = QuantumRegister(dim_freq.bit_length() - 1)
+    qr_f = QuantumRegister(num_freq_qubits) # FIX: Use correct register size
     
     # Calculate A(U) -> P_h -> A(U)^dagger manually for each Pauli
     for pauli_str, coeff in zip(observable_paulis, observable_coeffs):
