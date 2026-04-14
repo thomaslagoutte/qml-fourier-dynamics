@@ -57,3 +57,43 @@ class IsingTransverseFieldModel:
         from scipy.linalg import expm
         H_matrix = hamiltonian.to_matrix()
         return expm(1j * tau * H_matrix)    
+
+class SchwingerZ2Model:
+    """
+    1D Z2 Lattice Gauge Theory (Schwinger Model) Hamiltonian.
+    Matter sites: Even indices (0, 2, 4...) -> representing fermions/antifermions.
+    Gauge links: Odd indices (1, 3, 5...) -> representing the electric field.
+    """
+    def __init__(self, num_matter_sites: int):
+        self.num_matter = num_matter_sites
+        self.num_gauge = num_matter_sites - 1
+        self.num_qubits = self.num_matter + self.num_gauge
+
+    def generate_hamiltonian(self, mass: float, electric_field: float, interaction: float = 1.0) -> SparsePauliOp:
+        paulis = []
+        coeffs = []
+
+        # 1. Matter Mass (Z on even qubits)
+        for i in range(self.num_matter):
+            p_str = ['I'] * self.num_qubits
+            p_str[self.num_qubits - 1 - (2*i)] = 'Z'
+            paulis.append("".join(p_str))
+            coeffs.append(mass)
+
+        # 2. Electric Field (X on odd qubits)
+        for i in range(self.num_gauge):
+            p_str = ['I'] * self.num_qubits
+            p_str[self.num_qubits - 1 - (2*i + 1)] = 'X'
+            paulis.append("".join(p_str))
+            coeffs.append(electric_field)
+
+        # 3. Matter-Gauge Interaction (X_{2i} Z_{2i+1} X_{2i+2})
+        for i in range(self.num_gauge):
+            p_str = ['I'] * self.num_qubits
+            p_str[self.num_qubits - 1 - (2*i)] = 'X'
+            p_str[self.num_qubits - 1 - (2*i + 1)] = 'Z'
+            p_str[self.num_qubits - 1 - (2*i + 2)] = 'X'
+            paulis.append("".join(p_str))
+            coeffs.append(interaction)
+
+        return SparsePauliOp(paulis, coeffs)
