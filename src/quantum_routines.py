@@ -1357,3 +1357,77 @@ class CircuitBuilder:
                 apply_pauli_extraction(pauli_str, qr_freqs[i])
 
         return qc, qr_freqs
+    
+    def build_lgt_expectation_value_extraction_circuit(
+        self,
+        num_matter_sites: int,
+        x_mask: List[int],
+        mass: float,
+        electric_field: float,
+        tau: float,
+        r_steps: int,
+        pauli_observable: str,
+    ) -> QuantumCircuit:
+        """Builds the fast A(U,P) expectation circuit for the Schwinger Model."""
+        num_gauge_links = num_matter_sites - 1
+        num_data_qubits = num_matter_sites + num_gauge_links
+        n_s = self._freq_register_size(r_steps)
+
+        # 1. Build forward A(U) circuit
+        base_qc, qr_freqs = self.build_lgt_trotter_extraction_circuit(
+            num_matter_sites, x_mask, mass, electric_field, tau, r_steps
+        )
+        
+        qr_data    = QuantumRegister(num_data_qubits, "data")
+        qr_ancilla = QuantumRegister(1, "ancilla")
+        
+        aup_qc = QuantumCircuit(qr_data, qr_ancilla, *qr_freqs)
+        all_qubits = list(qr_data) + list(qr_ancilla) + [q for reg in qr_freqs for q in reg]
+        
+        # Step 1: Apply forward A(U) as a single fast instruction
+        aup_qc.append(base_qc.to_instruction(), all_qubits)
+        
+        # Step 2: Apply Pauli observable
+        aup_qc.append(PauliGate(pauli_observable), list(qr_data))
+        
+        # Step 3: Explicit A(U)^dagger uncomputation
+        dt = tau / r_steps
+        cached_gates = self._get_cached_v_gates(n_s)
+        cVp_dag = cached_gates["cVp_dag"]
+        cVm_dag = cached_gates["cVm_dag"]
+        
+        for _step in reversed(range(r_steps)):
+            # A. Reverse Gauge Coupling Extractions (D * G * D)
+            for i in reversed(range(num_gauge_links)):
+                if x_mask[i] == 1:
+                    pauli_chars = ["I"] * num_data_qubits
+                    pauli_chars[2 * i]     = "X"
+                    pauli_chars[2 * i + 1] = "Z"
+                    pauli_chars[2 * i + 2] = "X"
+                    pauli_str = "".join(pauli_chars)[::-1]
+
+                    for idx, p in enumerate(reversed(pauli_str)):
+                        if p == "X": aup_qc.h(qr_data[idx])
+
+                    active = [qr_data[idx] for idx, p in enumerate(reversed(pauli_str)) if p in ("X", "Z")]
+                    for q in active: aup_qc.cx(q, qr_ancilla[0])
+
+                    aup_qc.append(cVm_dag, [qr_ancilla[0]] + list(qr_freqs[i])) 
+                    aup_qc.append(cVp_dag, [qr_ancilla[0]] + list(qr_freqs[i]))
+
+                    for q in reversed(active): aup_qc.cx(q, qr_ancilla[0])
+
+                    for idx, p in enumerate(reversed(pauli_str)):
+                        if p == "X": aup_qc.h(qr_data[idx])
+                        
+            # B. Reverse Electric Field
+            for i in reversed(range(num_gauge_links)):
+                aup_qc.rx(-2.0 * electric_field * dt, qr_data[2 * i + 1])
+                
+            # C. Reverse Mass (Fixed the (-1)**i staggered sign)
+            for i in reversed(range(num_matter_sites)):
+                aup_qc.rz(-2.0 * mass * (-1)**i * dt, qr_data[2 * i])
+
+        # REMOVED: The rogue Step 4 X-gates that were flipping the data register
+
+        return aup_qc
