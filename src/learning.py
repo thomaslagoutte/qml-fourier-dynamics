@@ -5,12 +5,12 @@ Implements the algorithm described in:
   Fourier Coefficient Extraction" (2025).
 """
 
-import math
-
 import numpy as np
 from sklearn.linear_model import Lasso
+from sklearn.kernel_ridge import KernelRidge
 from sklearn.metrics import mean_squared_error
 from qiskit.quantum_info import Statevector
+from tqdm import tqdm
 
 from src.models import IsingTransverseFieldModel
 from src.quantum_routines import CircuitBuilder
@@ -85,10 +85,17 @@ class FourierDynamicsLearner:
         num_qubits: int,
         tau: float,
         pauli_observable: str = None,
-        epsilon_b: float = 0.01
+        epsilon_b: float = 0.01,
     ):
         self.num_qubits = num_qubits
         self.tau = tau
+        # Default observable: sigma_z on qubit 0 in the little-endian Qiskit convention.
+        # 'Z' + 'I'*(n-1) means Z acts on qubit 0, identity on qubits 1..n-1.
+        # Qiskit uses little-endian Pauli strings: the rightmost character acts on
+        # qubit 0.  To target sigma_z on qubit 0 we need 'I'*(n-1)+'Z', e.g. 'IIZ'
+        # for a 3-qubit system.  The incorrect default 'Z'+'I'*(n-1) = 'ZII' would
+        # target qubit n-1 instead, making the observable insensitive to the alpha
+        # upload (which acts only on qubit 0 when d_params=1).
         self.pauli_observable = pauli_observable or ("I" * (num_qubits - 1) + "Z")
         self.epsilon_b = epsilon_b
         self.model = IsingTransverseFieldModel(num_qubits)
@@ -163,14 +170,27 @@ class FourierDynamicsLearner:
         circuit (Corollary 1 / Figure 4) as the controlled unitary inside the
         Hadamard test (Figure 7).
 
-        The A(U, P) circuit prepares (Corollary 1, Eq. 9):
+        The A(U, P) circuit A(U)† P A(U) is a unitary, so the ancilla always
+        returns to |0⟩.  The b_l coefficients are encoded as amplitudes at
+        |freq=l⟩|data=0⟩|anc=0⟩ in the output statevector, i.e.:
 
-            A(U,P)|0> = (1/||b||_2) sum_l b_l |l>_freq |0>_anc  +  |trash>|1>_anc
+            sv[(l % 2^n_s) * da_stride] = b_l   (complex amplitude)
 
-        Step 1 recovers ||b||_2 = sqrt(P(anc=0)) from the bare A(U,P) statevector.
-        Steps 2-3 run real and imaginary Hadamard tests to get
-        Re(b_l)/||b||_2 and Im(b_l)/||b||_2 respectively.
-        Step 4 multiplies back by ||b||_2 to recover b_l.
+        where da_stride = 2^(num_qubits+1) accounts for data + ancilla in the
+        low bits.  Summing their squared magnitudes gives:
+
+            ||b||_2^2 = P(data=0 AND anc=0)
+                      = sum_l |sv[(l%2^n_s) * da_stride]|^2
+
+        This quantity is extracted by marginalising over the joint (data, anc)
+        system, NOT over the ancilla alone — P(anc=0) = 1 for a unitary circuit
+        and therefore gives the wrong (trivial) norm.
+
+        The Hadamard test on A(U,P) returns:
+            ⟨Z⟩_HT = Re(b_l) / ||b||_2   (real part)
+            ⟨Z⟩_HT = Im(b_l) / ||b||_2   (imaginary part)
+
+        Multiplying by ||b||_2 recovers b_l exactly.
 
         Parameters
         ----------
@@ -186,24 +206,30 @@ class FourierDynamicsLearner:
         complex
             The Fourier coefficient b_l(x).
         """
-        # --- Step 1: ||b||_2^2 = P(ancilla=0) from A(U,P) ---------------
+        # --- Build A(U,P) statevector (used only for the zero-norm guard) ----
         aup_qc = builder.build_expectation_value_extraction_circuit(
             self.num_qubits, edges, self.tau, r_steps, self.pauli_observable
         )
         sv_aup = Statevector.from_instruction(aup_qc)
 
-        # Qubit layout of A(U,P): [data_0..data_{n-1}, ancilla, freq_0..freq_{n_s-1}]
-        ancilla_qubit = self.num_qubits
-        probs_aup = sv_aup.probabilities([ancilla_qubit])
-        norm_sq = float(probs_aup[0])  # P(ancilla = |0>)
+        # Guard: if the b_l vector is all-zero, skip the Hadamard tests.
+        # A(U,P) = A(U)† P A(U) is unitary, so P(anc=0) = 1 always and cannot
+        # be used as a norm.  The correct ||b||_2^2 is P(data=0 AND anc=0):
+        #   ||b||_2^2 = sum_l |b_l|^2 = sum_{l,k=0} |sv[(l%2^n_s)*da_stride]|^2
+        # which equals the (0,0) entry of the marginal over (data, ancilla).
+        data_and_ancilla = list(range(self.num_qubits + 1))   # qubits 0..n
+        probs_aup = sv_aup.probabilities(data_and_ancilla)
+        norm_sq = float(probs_aup[0])   # P(data=0 AND ancilla=0) = ||b||^2
 
         if norm_sq < 1e-12:
             return 0.0 + 0.0j
 
-        norm = math.sqrt(norm_sq)
-
         # --- Step 2: Re(b_l) via Hadamard test ---------------------------
-        # ht_ancilla is qubit 0; <Z> = 2*P(|0>) - 1 = Re(b_l)/||b||_2
+        # The A(U,P) circuit is a unitary: its statevector amplitudes are b_l
+        # directly (not b_l/||b||_2 as in the abstract paper formulation where
+        # A(U,P) applies a post-selection).  The Hadamard test on A(U,P) computes:
+        #   <Z>_HT = Re(<l,0,0| A(U,P) |0>) = Re(b_l)
+        # so z_exp_real is already Re(b_l).  No norm multiplication is needed.
         ht_real = builder.build_expectation_value_hadamard_test(
             self.num_qubits, edges, self.tau, r_steps,
             self.pauli_observable, register_index, part="real",
@@ -223,9 +249,9 @@ class FourierDynamicsLearner:
         probs_imag = sv_imag.probabilities([0])
         z_exp_imag = 2.0 * float(probs_imag[0]) - 1.0
 
-        # --- Step 4: Recover b_l -----------------------------------------
-        # b_l = ||b||_2 * (Re(b_l)/||b||_2 + i * Im(b_l)/||b||_2)
-        return norm * (z_exp_real + 1j * z_exp_imag)
+        # --- Step 4: Return b_l ------------------------------------------
+        # z_exp_real = Re(b_l), z_exp_imag = Im(b_l) — return directly.
+        return z_exp_real + 1j * z_exp_imag
 
     def extract_fourier_features(
         self,
@@ -295,65 +321,6 @@ class FourierDynamicsLearner:
         return B_matrix
 
     # ------------------------------------------------------------------
-    # Simulation-optimised shortcut (classical statevector only)
-    # ------------------------------------------------------------------
-
-    def extract_fourier_features_sim(
-        self,
-        datasets: list,
-        r_steps: int = 1,
-    ) -> np.ndarray:
-        """Build B by reading b_l directly from the A(U,P) statevector.
-
-        On a classical statevector simulator, the amplitude at state
-        |freq=l>|data=0>|anc=0> in the A(U,P) output equals b_l up to
-        the post-selection normalisation ||b||_2.  This avoids constructing
-        three separate Hadamard-test circuits per frequency, giving an
-        order-of-magnitude speedup suitable for notebook-level experiments.
-
-        .. note::
-            This is a **simulation shortcut**.  On real quantum hardware,
-            use ``extract_fourier_features`` (Hadamard-test circuits).
-
-        Parameters
-        ----------
-        datasets : list of list[(int,int)]
-        r_steps : int
-
-        Returns
-        -------
-        np.ndarray of shape (len(datasets), 4*r_steps + 1)
-            Same semantics as ``extract_fourier_features``.
-        """
-        builder = CircuitBuilder()
-        num_samples = len(datasets)
-
-        n_s = builder._freq_register_size(r_steps)
-        freq_dim = 2 ** n_s
-        # State index for |freq=reg>|anc=0>|data=0> (little-endian)
-        data_ancilla_dim = 2 ** (self.num_qubits + 1)
-
-        max_freq = 2 * r_steps
-        freq_indices = list(range(-max_freq, max_freq + 1))
-
-        B_matrix = np.zeros((num_samples, len(freq_indices)), dtype=float)
-
-        for sample_idx, edges in enumerate(datasets):
-            aup_qc = builder.build_expectation_value_extraction_circuit(
-                self.num_qubits, edges, self.tau, r_steps, self.pauli_observable
-            )
-            sv = Statevector.from_instruction(aup_qc).data
-
-            # b_l is stored at state index reg * data_ancilla_dim (data=0, anc=0)
-            for col_idx, l in enumerate(freq_indices):
-                reg = l % freq_dim
-                b_l = sv[reg * data_ancilla_dim]
-                noise = np.random.uniform(-self.epsilon_b, self.epsilon_b)
-                B_matrix[sample_idx, col_idx] = float(b_l.real) + noise
-
-        return B_matrix
-
-    # ------------------------------------------------------------------
     # Training and evaluation
     # ------------------------------------------------------------------
 
@@ -366,3 +333,122 @@ class FourierDynamicsLearner:
         """Return MSE of the learned model on held-out data."""
         y_pred = self.lasso.predict(B_test)
         return mean_squared_error(y_test, y_pred)
+
+    def extract_gram_matrix_sim(
+        self, 
+        builder: CircuitBuilder, 
+        datasets: list, 
+        r_steps: int
+    ) -> np.ndarray:
+        """
+        Builds the Gram matrix K where K_ij = k(x_i, x_j) = Re(b(x_i) . b(x_j))
+        using exact statevector simulation of the Figure 8 overlap circuit.
+        """
+        num_samples = len(datasets)
+        K = np.zeros((num_samples, num_samples))
+        
+        # Outer loop – progress bar over the first index i
+        for i in tqdm(range(num_samples), desc="Computing Gram matrix", unit="row"):
+            # Optional inner bar – shows progress over j (only the upper‑triangular part)
+            for j in tqdm(range(i, num_samples), desc="inner", leave=False, unit="col"):
+                qc_kernel = builder.build_quantum_overlap_kernel_circuit(
+                    self.num_qubits, datasets[i], datasets[j], self.tau, r_steps, d_params=self.num_qubits
+                    )
+                
+                # Remove measurements for exact statevector simulation
+                qc_kernel.remove_final_measurements()
+                sv = Statevector(qc_kernel)
+                
+                # In Qiskit little-endian, the kernel ancilla is the last qubit 
+                # (since it was added first in the register list).
+                # The state |rest=0, k_anc=0> is index 0.
+                # The state |rest=0, k_anc=1> is index 2**(total_qubits - 1).
+                
+                total_qubits = qc_kernel.num_qubits
+                ancilla_1_idx = 2 ** (total_qubits - 1)
+                
+                prob_0_0 = np.abs(sv.data[0])**2
+                prob_1_0 = np.abs(sv.data[ancilla_1_idx])**2
+                
+                # Re(b(x).b(x')) = P(anc=0, rest=0) - P(anc=1, rest=0)
+                overlap = prob_0_0 - prob_1_0
+                
+                K[i, j] = overlap
+                K[j, i] = overlap
+                
+        return K
+
+    def train_kernel(self, K_train: np.ndarray, y_train: np.ndarray, alpha_reg: float = 0.01):
+        """Fit the Kernel Ridge Regressor using the precomputed quantum Gram matrix."""
+        self.krr = KernelRidge(alpha=alpha_reg, kernel='precomputed')
+        self.krr.fit(K_train, y_train)
+        return self.krr
+    
+import numpy as np
+import itertools
+from sklearn.kernel_ridge import KernelRidge
+from qiskit.quantum_info import Statevector
+from src.quantum_routines import KernelCircuitBuilder
+
+class KernelDynamicsLearner:
+    def __init__(self, num_qubits: int, tau: float, pauli_observable: str):
+        self.num_qubits = num_qubits
+        self.tau = tau
+        self.pauli_observable = pauli_observable
+        self.builder = KernelCircuitBuilder()
+        self.krr = None
+
+    def _extract_b_vector_sim(self, edges: list, r_steps: int) -> np.ndarray:
+        """Extracts the exact flattened feature vector b(x) utilizing fast vectorization."""
+        from qiskit.quantum_info import Statevector
+        
+        aup_qc = self.builder.build_inhomogeneous_aup_circuit(
+            self.num_qubits, edges, self.tau, r_steps, self.pauli_observable
+        )
+        
+        # Execute fast statevector simulation
+        sv = Statevector(aup_qc).data
+
+        da_stride = 2 ** (self.num_qubits + 1)
+        n_s = self.builder._freq_register_size(r_steps)
+        freq_dim = 2 ** n_s
+        
+        # Generate the 1D frequency spectrum [-2r, ..., +2r]
+        freq_1d = np.arange(-2 * r_steps, 2 * r_steps + 1)
+        
+        # Create an n-dimensional meshgrid for all qubits simultaneously
+        mesh = np.meshgrid(*[freq_1d] * self.num_qubits, indexing='ij')
+        
+        # Vectorized calculation of all statevector indices
+        sv_indices = np.zeros_like(mesh[0])
+        for dim in range(self.num_qubits):
+            reg_stride = da_stride * (freq_dim ** dim)
+            sv_indices += (mesh[dim] % freq_dim) * reg_stride
+            
+        # Flatten the indices and extract directly from the complex array
+        return sv[sv_indices.flatten()].real
+
+    def extract_feature_matrix(self, datasets: list, r_steps: int, desc: str = "Extracting Features") -> np.ndarray:
+        """Extracts B matrix of shape (N_samples, (4r+1)^n)."""
+        total_modes = (4 * r_steps + 1) ** self.num_qubits
+        B = np.zeros((len(datasets), total_modes))
+        
+        # Wrap the enumeration with tqdm for a progress bar
+        for i, edges in enumerate(tqdm(datasets, desc=desc, leave=False)):
+            B[i, :] = self._extract_b_vector_sim(edges, r_steps)
+            
+        return B
+
+    def compute_gram_matrix(self, B_left: np.ndarray, B_right: np.ndarray = None) -> np.ndarray:
+        """Computes k(x, x') = B_left @ B_right.T mathematically identical to Figure 8."""
+        if B_right is None:
+            return B_left @ B_left.T
+        return B_left @ B_right.T
+
+    def train(self, K_train: np.ndarray, y_train: np.ndarray, alpha_reg: float = 0.1):
+        self.krr = KernelRidge(alpha=alpha_reg, kernel='precomputed')
+        self.krr.fit(K_train, y_train)
+        return self.krr
+    
+    def predict(self, K_test: np.ndarray):
+        return self.krr.predict(K_test)

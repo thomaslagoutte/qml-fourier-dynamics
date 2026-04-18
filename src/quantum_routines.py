@@ -9,12 +9,12 @@ Public API
 CircuitBuilder
     build_trotter_extraction_circuit       -- A(U) circuit (Theorem 1)
     build_expectation_value_extraction_circuit  -- A(U,P) circuit (Corollary 1 / Figure 4)
-    extract_b_l                            -- simulate A(U,P) and return b_l vector (any observable)
+    extract_b_l                            -- simulate A(U,P) and return b_l vector
     build_expectation_value_hadamard_test  -- HT on A(U,P) for b_l (Corollary 2 / Figure 7)
-    build_fourier_hadamard_test            -- HT on bare A(U) for a_{l,0} (Appendix C.4)
     build_quantum_overlap_kernel_circuit   -- Kernel circuit (Section VI.B / Figure 8)
     build_lcu_fourier_extraction_circuit   -- LCU extension for multi-term observables
-    build_lgt_trotter_extraction_circuit   -- LGT extension
+    build_lgt_trotter_extraction_circuit   -- LGT / Schwinger model A(U) circuit
+    build_lgt_expectation_value_extraction_circuit -- LGT A(U,P) circuit
 """
 
 import math
@@ -311,15 +311,10 @@ class CircuitBuilder:
         ancilla_qubit,
         freq_register: QuantumRegister,
     ) -> None:
-        """Apply V+ if ancilla=|0>, V- if ancilla=|1> on freq_register.
-
-        Implements G(s_l) from Appendix C.1, Eq. C6.
-        """
-        n = freq_register.size
-        v_plus  = self._build_V_plus_gate(n)
-        v_minus = self._build_V_minus_gate(n)
-        qc.append(v_plus.control(1,  ctrl_state="0"), [ancilla_qubit] + list(freq_register))
-        qc.append(v_minus.control(1, ctrl_state="1"), [ancilla_qubit] + list(freq_register))
+        """Apply V+ if ancilla=|0>, V- if ancilla=|1> on freq_register."""
+        gates = self._get_cached_v_gates(freq_register.size)
+        qc.append(gates["cVp"], [ancilla_qubit] + list(freq_register))
+        qc.append(gates["cVm"], [ancilla_qubit] + list(freq_register))
 
     def transform_data_upload_gate(
         self,
@@ -789,6 +784,168 @@ class CircuitBuilder:
 
         return b
 
+    def extract_b_l_model4(
+        self,
+        num_qubits: int,
+        x_edges: List[Tuple[int, int]],
+        tau: float,
+        r_steps: int,
+        pauli_observable: str,
+        epsilon_b: float = 0.0,
+    ) -> np.ndarray:
+        """Extract the 2D Fourier feature tensor b_{l0,l1} for Model 4.
+
+        Model 4 Hamiltonian:
+            H(x, alpha, beta) = alpha * sum_{(i,j) in x} ZiZj  +  beta * sum_i Xi
+
+        Both alpha (ZZ coupling) and beta (X field) are UNKNOWN, so both must be
+        encoded into separate frequency registers:
+            freq_0  (n_s_zz qubits): tracks alpha — D·G·D on each ZZ pair (i,j)
+            freq_1  (n_s_x  qubits): tracks beta  — D·G·D on each X qubit (all n)
+
+        This is the correct d=2 implementation.  The previous ``extract_b_l_full``
+        only encoded beta (d=1), effectively treating alpha as a known constant
+        equal to 1 — which invalidates the claim of genuinely learning a two-parameter
+        model.
+
+        The A(U,P) circuit built here is:
+            A(U)† · P · A(U)
+        where each Trotter step of A(U) applies:
+            ZZ encoding: D·G·D on {qr_data[i], qr_data[j]} into freq_0  (Z parity, no H)
+            X  encoding: D·G·D on {qr_data[q]} into freq_1              (X parity, with H)
+
+        Spectrum sizes:
+            l0 in [-|E|*r, +|E|*r]   where |E| = number of active edges
+            l1 in [-n*r,   +n*r]     (all n qubits contribute +-1 per step to freq_1)
+        Feature vector: flattened (l0, l1) grid of size (4r+1) * (4nr+1).
+
+        Fourier reconstruction:
+            f(alpha_up, beta_up; x) =
+              sum_{l0,l1} b_{l0,l1} * e^{i*pi*alpha_up*l0} * e^{i*pi*beta_up*l1}
+
+        matches the physical Trotter label at:
+            alpha_up = alpha_phys * tau / (pi * r)
+            beta_up  = beta_phys  * tau / (pi * r)
+
+        Parameters
+        ----------
+        num_qubits : int
+        x_edges : list of (int, int)
+        tau : float
+        r_steps : int
+        pauli_observable : str — Qiskit little-endian Pauli string
+        epsilon_b : float — optional shot noise
+
+        Returns
+        -------
+        np.ndarray, shape ((4*r_steps+1) * (4*num_qubits*r_steps+1),)
+            Flattened real Fourier coefficients b_{l0,l1} with l0 in the outer
+            loop and l1 in the inner loop:
+            index = col0 * (4*n*r+1) + col1
+        """
+        from qiskit.quantum_info import Statevector
+
+        n_s_zz  = self._freq_register_size(r_steps)           # freq_0: alpha (ZZ)
+        n_s_x   = self._freq_register_size_full(r_steps, num_qubits)  # freq_1: beta (X)
+        fd_zz   = 2 ** n_s_zz
+        fd_x    = 2 ** n_s_x
+        da_stride = 2 ** (num_qubits + 1)   # data + ancilla in low bits
+
+        max_l0 = 2 * r_steps                 # ZZ: +-1 per edge per step; use +-r as conservative bound
+        max_l1 = 2 * num_qubits * r_steps    # X:  +-n per step
+
+        spec_l0 = 2 * max_l0 + 1
+        spec_l1 = 2 * max_l1 + 1
+        feature_size = spec_l0 * spec_l1
+
+        # ── Build A(U, P) with two frequency registers ──────────────────────
+        gates_zz = self._get_cached_v_gates(n_s_zz)
+        gates_x  = self._get_cached_v_gates(n_s_x)
+        cVp_zz, cVm_zz = gates_zz["cVp"], gates_zz["cVm"]
+        cVp_zz_dag, cVm_zz_dag = gates_zz["cVp_dag"], gates_zz["cVm_dag"]
+        cVp_x,  cVm_x  = gates_x["cVp"],  gates_x["cVm"]
+        cVp_x_dag,  cVm_x_dag  = gates_x["cVp_dag"],  gates_x["cVm_dag"]
+
+        qr_data    = QuantumRegister(num_qubits, "data")
+        qr_ancilla = QuantumRegister(1, "ancilla")
+        qr_fzz     = QuantumRegister(n_s_zz, "freq_zz")   # alpha register
+        qr_fx      = QuantumRegister(n_s_x,  "freq_x")    # beta register
+
+        aup_qc = QuantumCircuit(qr_data, qr_ancilla, qr_fzz, qr_fx)
+
+        def d_g_d_zz_fwd(i, j):
+            """D·G·D for ZiZj into freq_zz (forward)."""
+            aup_qc.cx(qr_data[i], qr_ancilla[0])
+            aup_qc.cx(qr_data[j], qr_ancilla[0])
+            aup_qc.append(cVp_zz, [qr_ancilla[0]] + list(qr_fzz))
+            aup_qc.append(cVm_zz, [qr_ancilla[0]] + list(qr_fzz))
+            aup_qc.cx(qr_data[j], qr_ancilla[0])
+            aup_qc.cx(qr_data[i], qr_ancilla[0])
+
+        def d_g_d_x_fwd(q):
+            """D·G·D for Xi into freq_x (forward)."""
+            aup_qc.h(qr_data[q])
+            aup_qc.cx(qr_data[q], qr_ancilla[0])
+            aup_qc.append(cVp_x, [qr_ancilla[0]] + list(qr_fx))
+            aup_qc.append(cVm_x, [qr_ancilla[0]] + list(qr_fx))
+            aup_qc.cx(qr_data[q], qr_ancilla[0])
+            aup_qc.h(qr_data[q])
+
+        def d_g_d_zz_adj(i, j):
+            """D·G†·D for ZiZj (adjoint — V gates conjugated, order reversed)."""
+            aup_qc.cx(qr_data[i], qr_ancilla[0])
+            aup_qc.cx(qr_data[j], qr_ancilla[0])
+            aup_qc.append(cVm_zz_dag, [qr_ancilla[0]] + list(qr_fzz))
+            aup_qc.append(cVp_zz_dag, [qr_ancilla[0]] + list(qr_fzz))
+            aup_qc.cx(qr_data[j], qr_ancilla[0])
+            aup_qc.cx(qr_data[i], qr_ancilla[0])
+
+        def d_g_d_x_adj(q):
+            """D·G†·D for Xi (adjoint)."""
+            aup_qc.h(qr_data[q])
+            aup_qc.cx(qr_data[q], qr_ancilla[0])
+            aup_qc.append(cVm_x_dag, [qr_ancilla[0]] + list(qr_fx))
+            aup_qc.append(cVp_x_dag, [qr_ancilla[0]] + list(qr_fx))
+            aup_qc.cx(qr_data[q], qr_ancilla[0])
+            aup_qc.h(qr_data[q])
+
+        # A(U) forward: r steps, each step encodes both ZZ and X upload gates
+        for _ in range(r_steps):
+            for i, j in x_edges:
+                d_g_d_zz_fwd(i, j)
+            for q in range(num_qubits):
+                d_g_d_x_fwd(q)
+
+        # Apply observable P on data register
+        aup_qc.append(PauliGate(pauli_observable), list(qr_data))
+
+        # A(U)† adjoint: reversed steps, reversed gate order within each step
+        for _ in reversed(range(r_steps)):
+            for q in reversed(range(num_qubits)):
+                d_g_d_x_adj(q)
+            for i, j in reversed(x_edges):
+                d_g_d_zz_adj(i, j)
+
+        sv = Statevector(aup_qc)
+
+        # ── Extract b_{l0,l1} from statevector ──────────────────────────────
+        # Register layout (Qiskit LE, LSB first):
+        #   [data(n), anc(1), freq_zz(n_s_zz), freq_x(n_s_x)]
+        # sv index for (data=0, anc=0, fzz=l0, fx=l1):
+        #   = (l0 % fd_zz) * da_stride + (l1 % fd_x) * da_stride * fd_zz
+        b = np.zeros(feature_size)
+        for col0, l0 in enumerate(range(-max_l0, max_l0 + 1)):
+            for col1, l1 in enumerate(range(-max_l1, max_l1 + 1)):
+                idx = ((l0 % fd_zz) * da_stride
+                       + (l1 % fd_x)  * da_stride * fd_zz)
+                flat = col0 * spec_l1 + col1
+                b[flat] = sv.data[idx].real
+
+        if epsilon_b > 0.0:
+            b += np.random.uniform(-epsilon_b, epsilon_b, b.shape)
+
+        return b
+
     def build_expectation_value_extraction_circuit_full(
         self,
         num_qubits: int,
@@ -1056,70 +1213,6 @@ class CircuitBuilder:
         return ht_qc
 
     # ------------------------------------------------------------------
-    # Hadamard test on bare A(U)  (Appendix C.4 / Figure 7)
-    # ------------------------------------------------------------------
-
-    def build_fourier_hadamard_test(
-        self,
-        num_qubits: int,
-        x_edges: List[Tuple[int, int]],
-        tau: float,
-        r_steps: int,
-        target_freq: int,
-        part: str = "real",
-    ) -> QuantumCircuit:
-        """Build the Hadamard test for a single A(U) amplitude a_{l,0}.
-
-        This circuit extracts the amplitude a_{l,0} from the bare A(U)
-        output state (Theorem 1), NOT the expectation-value coefficient b_l.
-        Use ``build_expectation_value_hadamard_test`` for b_l extraction.
-
-        Kept for backward compatibility and as a building block.
-
-        Parameters
-        ----------
-        num_qubits, x_edges, tau, r_steps, target_freq, part
-            Same semantics as ``build_expectation_value_hadamard_test``.
-
-        Returns
-        -------
-        QuantumCircuit
-            HT circuit for a_{target_freq, 0}.
-        """
-        base_qc, qr_freqs = self.build_trotter_extraction_circuit(
-            num_qubits, x_edges, tau, r_steps, d_params=1
-        )
-        n_s = qr_freqs[0].size
-
-        qr_ht_anc = QuantumRegister(1, "ht_ancilla")
-        qr_data   = QuantumRegister(num_qubits, "data")
-        qr_anc    = QuantumRegister(1, "ancilla")
-        qr_freq   = QuantumRegister(n_s, "freq_0")
-        cr_meas   = ClassicalRegister(1, "meas")
-
-        ht_qc = QuantumCircuit(qr_ht_anc, qr_data, qr_anc, qr_freq, cr_meas)
-
-        ht_qc.h(qr_ht_anc)
-        if part == "imag":
-            ht_qc.sdg(qr_ht_anc)
-
-        controlled_au = base_qc.to_gate(label="A(U)").control(1)
-        ht_qc.append(
-            controlled_au,
-            [qr_ht_anc[0]] + list(qr_data) + list(qr_anc) + list(qr_freq),
-        )
-
-        binary_str = format(target_freq, f"0{n_s}b")
-        for bit_idx, bit_val in enumerate(reversed(binary_str)):
-            if bit_val == "1":
-                ht_qc.cx(qr_ht_anc[0], qr_freq[bit_idx])
-
-        ht_qc.h(qr_ht_anc)
-        ht_qc.measure(qr_ht_anc, cr_meas)
-
-        return ht_qc
-
-    # ------------------------------------------------------------------
     # Kernel overlap circuit  (Section VI.B / Figure 8)
     # ------------------------------------------------------------------
 
@@ -1130,48 +1223,35 @@ class CircuitBuilder:
         x_edges_2: List[Tuple[int, int]],
         tau: float,
         r_steps: int,
+        d_params: int = 1,  # Added to support multi-parameter kernels
     ) -> QuantumCircuit:
-        """Build the circuit that estimates the kernel k(x, x') = b(x)·b(x').
-
-        Implements the quantum overlap circuit from Figure 8 of the paper.
-        The kernel value Re(<b(x)|b(x')>) is recovered from:
-
-            <Z ⊗ I ⊗ |0><0|> = Re(b(x)·b(x'))
-
-        Parameters
-        ----------
-        num_qubits : int
-        x_edges_1, x_edges_2 : list of (int, int)
-            Edge sets for graphs x and x'.
-        tau : float
-        r_steps : int
-
-        Returns
-        -------
-        QuantumCircuit
-            Kernel circuit with measurements on the kernel ancilla and all
-            other qubits.
-        """
+        """Build the circuit that estimates the kernel k(x, x') = b(x)·b(x')."""
+        
+        # Pass d_params to the base circuits
         qc_1, qr_freqs = self.build_trotter_extraction_circuit(
-            num_qubits, x_edges_1, tau, r_steps, d_params=1
+            num_qubits, x_edges_1, tau, r_steps, d_params=d_params
         )
         qc_2, _ = self.build_trotter_extraction_circuit(
-            num_qubits, x_edges_2, tau, r_steps, d_params=1
+            num_qubits, x_edges_2, tau, r_steps, d_params=d_params
         )
-        n_s = qr_freqs[0].size
 
         qr_k_anc = QuantumRegister(1, "kernel_ancilla")
         qr_data  = QuantumRegister(num_qubits, "data")
         qr_anc   = QuantumRegister(1, "ancilla")
-        qr_freq  = QuantumRegister(n_s, "freq_0")
+        
+        # Dynamically recreate all frequency registers from the base circuit
+        qr_freqs_new = [QuantumRegister(reg.size, reg.name) for reg in qr_freqs]
+        
+        # Flatten all target qubits (data + ancilla + all freq registers)
+        target = list(qr_data) + list(qr_anc) + [q for reg in qr_freqs_new for q in reg]
+        
         cr_k     = ClassicalRegister(1, "meas_k_ancilla")
-        cr_rest  = ClassicalRegister(num_qubits + 1 + n_s, "meas_rest")
+        cr_rest  = ClassicalRegister(len(target), "meas_rest")
 
-        kernel_qc = QuantumCircuit(qr_k_anc, qr_data, qr_anc, qr_freq, cr_k, cr_rest)
+        kernel_qc = QuantumCircuit(qr_k_anc, qr_data, qr_anc, *qr_freqs_new, cr_k, cr_rest)
 
         gate_1 = qc_1.to_gate(label="A(U_x)").control(1, ctrl_state="0")
         gate_2 = qc_2.to_gate(label="A(U_x')").control(1, ctrl_state="1")
-        target = list(qr_data) + list(qr_anc) + list(qr_freq)
 
         kernel_qc.h(qr_k_anc)
         kernel_qc.append(gate_1, [qr_k_anc[0]] + target)
@@ -1357,77 +1437,138 @@ class CircuitBuilder:
                 apply_pauli_extraction(pauli_str, qr_freqs[i])
 
         return qc, qr_freqs
-    
-    def build_lgt_expectation_value_extraction_circuit(
-        self,
-        num_matter_sites: int,
-        x_mask: List[int],
-        mass: float,
-        electric_field: float,
-        tau: float,
-        r_steps: int,
-        pauli_observable: str,
-    ) -> QuantumCircuit:
-        """Builds the fast A(U,P) expectation circuit for the Schwinger Model."""
-        num_gauge_links = num_matter_sites - 1
-        num_data_qubits = num_matter_sites + num_gauge_links
+
+import numpy as np
+from qiskit import QuantumCircuit, QuantumRegister
+from qiskit.circuit.library import PauliGate
+from qiskit.quantum_info import Statevector, SparsePauliOp
+
+from src.quantum_routines import CircuitBuilder
+
+class KernelCircuitBuilder(CircuitBuilder):
+    """Extends CircuitBuilder for the inhomogeneous TFIM (d=n) regime."""
+
+    def _native_cVp(self, qc: QuantumCircuit, ctrl, ctrl_state: int, target_reg):
+        """Native controlled V+ using MCX gates (bypasses dense matrix bottleneck)."""
+        if ctrl_state == 0: 
+            qc.x(ctrl)
+        
+        # MSB down to LSB (Ripple carry increment)
+        for i in range(len(target_reg) - 1, 0, -1):
+            controls = [ctrl] + list(target_reg[:i])
+            qc.mcx(controls, target_reg[i])
+            
+        qc.cx(ctrl, target_reg[0])
+        
+        if ctrl_state == 0: 
+            qc.x(ctrl)
+
+    def _native_cVm(self, qc: QuantumCircuit, ctrl, ctrl_state: int, target_reg):
+        """Native controlled V- using MCX gates (bypasses dense matrix bottleneck)."""
+        if ctrl_state == 0: 
+            qc.x(ctrl)
+            
+        qc.cx(ctrl, target_reg[0])
+        
+        # LSB up to MSB (Ripple carry decrement)
+        for i in range(1, len(target_reg)):
+            controls = [ctrl] + list(target_reg[:i])
+            qc.mcx(controls, target_reg[i])
+            
+        if ctrl_state == 0: 
+            qc.x(ctrl)
+
+    def build_inhomogeneous_extraction_circuit(
+        self, num_qubits: int, x_edges: list, tau: float, r_steps: int
+    ):
+        """Builds A(U) natively: d=n independent frequency registers."""
         n_s = self._freq_register_size(r_steps)
-
-        # 1. Build forward A(U) circuit
-        base_qc, qr_freqs = self.build_lgt_trotter_extraction_circuit(
-            num_matter_sites, x_mask, mass, electric_field, tau, r_steps
-        )
-        
-        qr_data    = QuantumRegister(num_data_qubits, "data")
+        qr_data = QuantumRegister(num_qubits, "data")
         qr_ancilla = QuantumRegister(1, "ancilla")
-        
-        aup_qc = QuantumCircuit(qr_data, qr_ancilla, *qr_freqs)
-        all_qubits = list(qr_data) + list(qr_ancilla) + [q for reg in qr_freqs for q in reg]
-        
-        # Step 1: Apply forward A(U) as a single fast instruction
-        aup_qc.append(base_qc.to_instruction(), all_qubits)
-        
-        # Step 2: Apply Pauli observable
-        aup_qc.append(PauliGate(pauli_observable), list(qr_data))
-        
-        # Step 3: Explicit A(U)^dagger uncomputation
-        dt = tau / r_steps
-        cached_gates = self._get_cached_v_gates(n_s)
-        cVp_dag = cached_gates["cVp_dag"]
-        cVm_dag = cached_gates["cVm_dag"]
-        
-        for _step in reversed(range(r_steps)):
-            # A. Reverse Gauge Coupling Extractions (D * G * D)
-            for i in reversed(range(num_gauge_links)):
-                if x_mask[i] == 1:
-                    pauli_chars = ["I"] * num_data_qubits
-                    pauli_chars[2 * i]     = "X"
-                    pauli_chars[2 * i + 1] = "Z"
-                    pauli_chars[2 * i + 2] = "X"
-                    pauli_str = "".join(pauli_chars)[::-1]
+        qr_freqs = [QuantumRegister(n_s, f"freq_{i}") for i in range(num_qubits)]
 
-                    for idx, p in enumerate(reversed(pauli_str)):
-                        if p == "X": aup_qc.h(qr_data[idx])
+        qc = QuantumCircuit(qr_data, qr_ancilla, *qr_freqs)
 
-                    active = [qr_data[idx] for idx, p in enumerate(reversed(pauli_str)) if p in ("X", "Z")]
-                    for q in active: aup_qc.cx(q, qr_ancilla[0])
+        for _ in range(r_steps):
+            # Fixed ZZ interactions
+            for i, j in x_edges:
+                qc.rzz(2.0 * tau / r_steps, qr_data[i], qr_data[j])
 
-                    aup_qc.append(cVm_dag, [qr_ancilla[0]] + list(qr_freqs[i])) 
-                    aup_qc.append(cVp_dag, [qr_ancilla[0]] + list(qr_freqs[i]))
-
-                    for q in reversed(active): aup_qc.cx(q, qr_ancilla[0])
-
-                    for idx, p in enumerate(reversed(pauli_str)):
-                        if p == "X": aup_qc.h(qr_data[idx])
-                        
-            # B. Reverse Electric Field
-            for i in reversed(range(num_gauge_links)):
-                aup_qc.rx(-2.0 * electric_field * dt, qr_data[2 * i + 1])
+            # Independent native D·G·D blocks for each qubit i
+            for i in range(num_qubits):
+                qc.h(qr_data[i])
+                qc.cx(qr_data[i], qr_ancilla[0])
                 
-            # C. Reverse Mass (Fixed the (-1)**i staggered sign)
-            for i in reversed(range(num_matter_sites)):
-                aup_qc.rz(-2.0 * mass * (-1)**i * dt, qr_data[2 * i])
+                # Native G block
+                self._native_cVp(qc, qr_ancilla[0], 0, qr_freqs[i])
+                self._native_cVm(qc, qr_ancilla[0], 1, qr_freqs[i])
+                
+                qc.cx(qr_data[i], qr_ancilla[0])
+                qc.h(qr_data[i])
 
-        # REMOVED: The rogue Step 4 X-gates that were flipping the data register
+        return qc, qr_freqs
 
+    def _append_inhomogeneous_au_adjoint(
+        self, qc, x_edges, tau, r_steps, num_qubits, qr_data, qr_ancilla, qr_freqs
+    ):
+        """Manually applies A(U) dagger natively to avoid Qiskit .inverse()."""
+        for _ in reversed(range(r_steps)):
+            # 1. Reverse the D*G*D alpha-upload blocks
+            for i in reversed(range(num_qubits)):
+                qc.h(qr_data[i])
+                qc.cx(qr_data[i], qr_ancilla[0])
+                
+                # (V-)† = V+ (ctrl=1)
+                self._native_cVp(qc, qr_ancilla[0], 1, qr_freqs[i])
+                # (V+)† = V- (ctrl=0)
+                self._native_cVm(qc, qr_ancilla[0], 0, qr_freqs[i])
+                
+                qc.cx(qr_data[i], qr_ancilla[0])
+                qc.h(qr_data[i])
+
+            # 2. Reverse the ZZ interactions
+            for i, j in reversed(x_edges):
+                qc.rzz(-2.0 * tau / r_steps, qr_data[i], qr_data[j])
+
+    def build_inhomogeneous_aup_circuit(
+        self, num_qubits: int, x_edges: list, tau: float, r_steps: int, pauli_observable: str
+    ):
+        """Builds A(U, P) entirely with native gates for instant statevector simulation."""
+        base_qc, qr_freqs = self.build_inhomogeneous_extraction_circuit(
+            num_qubits, x_edges, tau, r_steps
+        )
+        qr_data = base_qc.qregs[0]
+        qr_ancilla = base_qc.qregs[1]
+
+        aup_qc = base_qc.copy()
+
+        # Apply observable
+        aup_qc.append(PauliGate(pauli_observable), list(qr_data))
+
+        # Explicit, manual uncomputation natively
+        self._append_inhomogeneous_au_adjoint(
+            aup_qc, x_edges, tau, r_steps, num_qubits, qr_data, qr_ancilla, qr_freqs
+        )
         return aup_qc
+
+    def compute_au_labels_inhomogeneous(
+        self, graphs: list, num_qubits: int, alphas: np.ndarray, tau: float, r_steps: int, obs_str: str
+    ) -> np.ndarray:
+        """Computes A(U)-consistent Trotter labels mapping alpha_i -> alpha_upload_i."""
+        obs_matrix = SparsePauliOp(obs_str).to_matrix()
+        labels = np.zeros(len(graphs))
+        
+        alpha_uploads = alphas * tau / (np.pi * r_steps)
+
+        for idx, edges in enumerate(graphs):
+            qc = QuantumCircuit(num_qubits)
+            for _ in range(r_steps):
+                for i, j in edges:
+                    qc.rzz(2.0 * tau / r_steps, i, j)
+                for q in range(num_qubits):
+                    qc.rx(-2.0 * np.pi * alpha_uploads[q], q)
+                    
+            sv = Statevector(qc)
+            labels[idx] = float(np.real(sv.data.conj() @ obs_matrix @ sv.data))
+            
+        return labels
