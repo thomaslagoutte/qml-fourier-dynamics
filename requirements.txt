@@ -1,6 +1,35 @@
-qiskit>=1.0.0
+# ==============================================================================
+#  quantum_learning_dynamics — runtime + notebook dependencies
+# ------------------------------------------------------------------------------
+#  Targets Python 3.12+.  Version floors are chosen to match the APIs the
+#  package actually uses:
+#    - Qiskit 1.x (SparsePauliOp, PauliEvolutionGate, .to_gate().control(...))
+#    - NumPy 1.26+ (np.random.SeedSequence.spawn, np.meshgrid(indexing='ij'))
+#    - SciPy 1.11+ (scipy.linalg.expm on dense arrays)
+#    - scikit-learn 1.4+ (Lasso(fit_intercept=False), KernelRidge(kernel='precomputed'))
+# ==============================================================================
+
+# --- Quantum stack ------------------------------------------------------------
+qiskit>=1.0.0,<2.0.0
 qiskit-aer>=0.14.0
+
+# --- Numerical / scientific core ---------------------------------------------
 numpy>=1.26.0
 scipy>=1.11.0
+
+# --- Classical learners -------------------------------------------------------
 scikit-learn>=1.4.0
+
+# --- Progress bars (used in label generation loops) --------------------------
+tqdm>=4.66.0
+
+# --- Notebooks (plots + kernel) ----------------------------------------------
+# These are required to run notebooks/01_tfim_validation.ipynb and
+# notebooks/02_schwinger_validation.ipynb.  They are also exposed as the
+# [notebooks] extra in pyproject.toml.
+matplotlib>=3.8.0
+jupyter>=1.0.0
+ipykernel>=6.29.0
+
+# --- Test suite ---------------------------------------------------------------
 pytest>=8.0.0
