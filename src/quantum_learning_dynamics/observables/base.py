@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Iterator, Sequence
+from typing import Iterator
 
 from qiskit.quantum_info import SparsePauliOp
 
@@ -20,69 +20,33 @@ from .._types import PauliString
 
 @dataclass(frozen=True)
 class PauliTerm:
-    """One term in an observable: ``coefficient * pauli_string``.
-
-    Attributes
-    ----------
-    pauli : PauliString
-        Qiskit little-endian Pauli string (rightmost char acts on qubit 0).
-    coefficient : float
-        Real coefficient beta_h.  Imaginary parts are not supported because
-        observables are Hermitian and we extract only real Fourier features.
-    """
-
+    """One real-coefficient Pauli term in an observable's linear decomposition."""
     pauli: PauliString
     coefficient: float
 
 
 class Observable(ABC):
-    """Hermitian observable O acting on ``num_qubits`` data qubits.
+    """Observable expressed as O = Σ_h c_h · P_h (real coefficients).
 
-    Subclasses must override :meth:`terms`, which returns the Pauli
-    decomposition.  Single-Pauli observables return a length-1 list;
-    composite observables (staggered magnetization, electric flux, ...)
-    return one entry per Pauli string.
-
-    Immutable physics constraint
-    ----------------------------
-    Composite observables MUST NOT be pushed into Qiskit as a single
-    ``SparsePauliOp`` within the ``A(U, P)`` extraction circuit.  The
-    amplitude-encoding identity exploited by ``A(U, P)`` applies per-Pauli;
-    summing first breaks it.  Linearity is enforced at the feature level
-    (see :class:`FeatureExtractor`).
+    The `terms()` iterator EXPOSES the decomposition. This is load-bearing:
+    FeatureExtractor.extract iterates the terms and sums
+        feature(x) = Σ_h c_h · b_h(x)
+    where each b_h is extracted from an A(U, P_h) circuit built from ONE Pauli
+    string. Composite observables must NEVER be folded into a single
+    SparsePauliOp for extraction — that would break the statevector-amplitude
+    indexing that the extractors rely on.
     """
 
-    # -- subclass API ----------------------------------------------------
-
-    @property
     @abstractmethod
-    def num_qubits(self) -> int:
-        """Number of data qubits this observable acts on."""
+    def num_qubits(self) -> int: ...
 
     @abstractmethod
-    def terms(self) -> Sequence[PauliTerm]:
-        """Return the Pauli decomposition.  Must be non-empty."""
+    def terms(self) -> Iterator[PauliTerm]: ...
 
-    # -- convenience -----------------------------------------------------
-
-    def __iter__(self) -> Iterator[PauliTerm]:
-        return iter(self.terms())
-
-    def __len__(self) -> int:
-        return len(self.terms())
-
-    @property
-    def is_single_pauli(self) -> bool:
-        """True iff the observable is a single Pauli string (|terms| == 1)."""
-        return len(self.terms()) == 1
+    # --- dense-evaluation helper (used only for ground-truth labels) ---------
 
     def to_sparse_pauli_op(self) -> SparsePauliOp:
-        """Assemble a Qiskit :class:`SparsePauliOp` for *reference* only.
-
-        Used for exact label computation on the dense Hamiltonian matrix
-        (where linearity of expectation values is fine).  It is NEVER
-        passed to the A(U,P) builder.
-        """
-        paulis = [t.pauli for t in self.terms()]
-        coeffs = [t.coefficient for t in self.terms()]
-        return SparsePauliOp(paulis, coeffs)
+        """For exact label computation ONLY. Do NOT pass this into an extractor."""
+        return SparsePauliOp.from_list(
+            [(t.pauli, t.coefficient) for t in self.terms()]
+        )

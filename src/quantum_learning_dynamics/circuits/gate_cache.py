@@ -11,63 +11,67 @@ throughput collapse on the Schwinger runs.
 Any :class:`CircuitBuilder` subclass must route its V+/- access through
 this object — never construct the gates inline.
 """
-
 from __future__ import annotations
-
 from typing import Dict
+from qiskit import QuantumCircuit
+from qiskit.circuit.library import UnitaryGate
+from qiskit.quantum_info import Operator
 
+# Global cache to persist across ALL Experiment instantiations
+_GLOBAL_V_CACHE: Dict[int, Dict[str, UnitaryGate]] = {}
+
+def _build_native_cvp(n_s: int) -> QuantumCircuit:
+    """Native controlled V+ (ancilla is qubit 0, target is 1..n_s)."""
+    qc = QuantumCircuit(1 + n_s)
+    qc.x(0)  # ctrl_state = "0"
+    for i in range(n_s - 1, 0, -1):
+        qc.mcx([0] + list(range(1, i + 1)), i + 1)
+    qc.cx(0, 1)
+    qc.x(0)
+    return qc
+
+def _build_native_cvm(n_s: int) -> QuantumCircuit:
+    """Native controlled V- (ancilla is qubit 0, target is 1..n_s)."""
+    qc = QuantumCircuit(1 + n_s)
+    qc.cx(0, 1) # ctrl_state = "1" (no X needed)
+    for i in range(1, n_s):
+        qc.mcx([0] + list(range(1, i + 1)), i + 1)
+    return qc
 
 class VGateCache:
-    """Cache of controlled V+/- gates keyed by frequency-register size n_s.
+    """Per-register-size cache of controlled V+ / V- gates and their adjoints.
 
-    Notes
-    -----
-    * The cache is populated lazily: first call to :meth:`get` for a given
-      n_s builds both ``cVp`` and ``cVm`` and stores them.
-    * The cache is *instance-local* so that tests can instantiate isolated
-      builders; a shared global cache is easy to add later by passing the
-      same :class:`VGateCache` into multiple builders.
-    * Construction logic is delegated to :meth:`_build` which subclasses /
-      concrete implementations override or fill in.
+    Key schema:
+      "cVp"     : V+ controlled on ancilla == 0
+      "cVm"     : V- controlled on ancilla == 1
+      "cVp_dag" : (V+)† controlled on ancilla == 0
+      "cVm_dag" : (V-)† controlled on ancilla == 1
+
+    The ctrl_state split (0 for +, 1 for -) is what creates the two evolution
+    branches inside the Hadamard test sandwich.
     """
+    def get(self, n_s: int) -> Dict[str, UnitaryGate]:
+        if n_s not in _GLOBAL_V_CACHE:
+            _GLOBAL_V_CACHE[n_s] = self._build(n_s)
+        return _GLOBAL_V_CACHE[n_s]
 
-    def __init__(self) -> None:
-        self._cache: Dict[int, Dict[str, object]] = {}
-
-    def get(self, n_s: int) -> Dict[str, object]:
-        """Return ``{"cVp": <Gate>, "cVm": <Gate>}`` for register size ``n_s``.
-
-        Builds and caches on first access.
-        """
-        cached = self._cache.get(n_s)
-        if cached is not None:
-            return cached
-        built = self._build(n_s)
-        self._cache[n_s] = built
-        return built
-
-    def clear(self) -> None:
-        """Drop all cached gates (used in tests)."""
-        self._cache.clear()
-
-    def __contains__(self, n_s: int) -> bool:
-        return n_s in self._cache
-
-    def __len__(self) -> int:
-        return len(self._cache)
-
-    # ------------------------------------------------------------------
-    # Subclass / concrete-implementation hook
-    # ------------------------------------------------------------------
-
-    def _build(self, n_s: int) -> Dict[str, object]:
-        """Construct ``{"cVp", "cVm"}`` for register size ``n_s``.
-
-        Concrete implementation is filled in once the API skeleton is
-        approved; the logic is lifted verbatim from the legacy
-        ``CircuitBuilder._get_cached_v_gates`` in
-        ``src/quantum_routines.py``.
-        """
-        raise NotImplementedError(
-            "VGateCache._build — concrete V+/- construction pending approval."
-        )
+    @staticmethod
+    def _build(n_s: int) -> Dict[str, UnitaryGate]:
+        if n_s < 1:
+            raise ValueError(f"VGateCache requires n_s >= 1, got {n_s}")
+        
+        cvp_qc = _build_native_cvp(n_s)
+        cvm_qc = _build_native_cvm(n_s)
+        
+        # Convert directly to dense unitary matrices! 
+        # This makes Qiskit Statevector simulation infinitely faster.
+        vp_mat = Operator(cvp_qc).data
+        vm_mat = Operator(cvm_qc).data
+        
+        return {
+            "cVp":     UnitaryGate(vp_mat, label="cV+"),
+            "cVm":     UnitaryGate(vm_mat, label="cV-"),
+            "cVp_dag": UnitaryGate(vp_mat.conj().T, label="cV+†"),
+            "cVm_dag": UnitaryGate(vm_mat.conj().T, label="cV-†"),
+        }
+    

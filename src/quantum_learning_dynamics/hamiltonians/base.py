@@ -13,74 +13,63 @@ reference computations (exact unitary, random sampling).
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import List
 
 import numpy as np
 from qiskit.quantum_info import SparsePauliOp
+from scipy.linalg import expm
 
-from .._types import AlphaVector, InputX
+from .._types import AlphaVector, InputX, PauliString
 
 
 class HamiltonianModel(ABC):
-    """H(x, alpha) parameterized by graph structure x and unknown alpha.
+    """Abstract base for physical Hamiltonian families H(x, α).
 
-    Subclass contract
-    -----------------
-    Every subclass MUST set in ``__init__``:
+    Contract:
+        num_qubits    : int                  -- size of the data register
+        d             : int                  -- # of independent unknown parameters (|α|)
+        upload_paulis : List[PauliString]    -- weight-k Pauli string per α_k, length == d.
+                                                Tells the CircuitBuilder what the D block
+                                                needs to parity-fold onto anc[0] before
+                                                the frequency shift. For single-qubit
+                                                uploads (TFIM) weight is 1; for Z₂
+                                                Schwinger it's 3 (XZX).
 
-    * ``self.num_qubits`` — total number of data qubits.
-    * ``self.d`` — number of unknown parameters in alpha.  This drives the
-      auto-routing logic in :class:`Experiment` (d == 1 → shared-register
-      circuit, d > 1 → separate-registers circuit).
-
-    Subclasses MUST also override :meth:`generate_hamiltonian`,
-    :meth:`exact_unitary`, :meth:`sample_x`, and :meth:`sample_alpha`.
-
-    The ``x`` input is typed ``Any`` because the paper allows
-    problem-dependent encodings; each subclass specifies its concrete format
-    in its own docstring.
+    The `exact_unitary(x, α, τ) = exp(-i H(x, α) τ)` default implementation is
+    dense-matrix; fine for small n, override for large n if needed.
     """
 
+    # subclass must set these in __init__
     num_qubits: int
     d: int
 
-    # -- core algebraic primitives --------------------------------------
+    # --- abstract interface ------------------------------------------------
+
+    @property
+    @abstractmethod
+    def upload_paulis(self) -> List[PauliString]:
+        """One Pauli string per α component, in the order α is indexed."""
 
     @abstractmethod
-    def generate_hamiltonian(self, x: InputX, alpha: AlphaVector) -> SparsePauliOp:
-        """Return the SparsePauliOp for H(x, alpha).
-
-        Parameters
-        ----------
-        x : InputX
-            Subclass-specific encoding of the known graph/mask.
-        alpha : AlphaVector
-            Scalar (d == 1) or 1-D array of shape (d,) (d > 1).
-        """
-
-    @abstractmethod
-    def exact_unitary(self, x: InputX, alpha: AlphaVector, tau: float) -> np.ndarray:
-        """Return the dense unitary e^{i tau H(x, alpha)} via matrix exponentiation.
-
-        Used only for reference label generation and as a numerical
-        sanity check.  Circuits go through the CircuitBuilder subclasses,
-        not this method.
-        """
-
-    # -- sampling --------------------------------------------------------
+    def hamiltonian(self, x: InputX, alpha: AlphaVector) -> SparsePauliOp:
+        """Full H(x, α) as a SparsePauliOp on `num_qubits` qubits."""
 
     @abstractmethod
     def sample_x(self, rng: np.random.Generator) -> InputX:
-        """Sample one training-input x from the subclass's natural distribution."""
+        """Sample a fresh input x from the model's training distribution."""
 
     @abstractmethod
     def sample_alpha(self, rng: np.random.Generator) -> AlphaVector:
-        """Sample the unknown parameter vector alpha* used to generate labels.
+        """Sample a fresh α vector of length d."""
 
-        In PAC learning this is drawn once per experiment, not per sample.
-        """
+    # --- concrete helpers --------------------------------------------------
 
-    # -- convenience -----------------------------------------------------
-
-    def __repr__(self) -> str:
-        cls = type(self).__name__
-        return f"{cls}(num_qubits={self.num_qubits}, d={self.d})"
+    def exact_unitary(
+        self,
+        x: InputX,
+        alpha: AlphaVector,
+        tau: float,
+    ) -> np.ndarray:
+        """Dense U(x, α) = exp(-i τ H(x, α))."""
+        H = self.hamiltonian(x, alpha).to_matrix()
+        return expm(-1j * tau * H)

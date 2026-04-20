@@ -11,41 +11,49 @@ therefore necessarily ``model.d > 1``).
 
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 from sklearn.kernel_ridge import KernelRidge
 
+from .._types import FeatureMatrix, GramMatrix, LabelVector
 from .base import Learner
 
 
 class KernelRidgeLearner(Learner):
-    """Kernel Ridge with ``kernel='precomputed'``.
+    """Kernel ridge regression on the quantum-overlap Gram matrix K = B @ B.T.
 
-    :meth:`fit` expects the training-by-training Gram matrix
-    ``K_train`` of shape ``(T, T)``.  :meth:`predict` expects the
-    cross-kernel matrix ``K_cross`` of shape ``(T_test, T_train)``.
-
-    Parameters
-    ----------
-    alpha : float, default 0.1
-        KRR regularisation lambda.
+    sklearn's KernelRidge with kernel='precomputed' expects:
+        fit(K_train, y)          -- K_train is (n_train, n_train)
+        predict(K_test_train)    -- K_test_train is (n_test, n_train)
+    We cache B_train at fit time and recompute the test-to-train Gram at
+    predict time so downstream code can pass the raw feature matrix to both.
     """
 
     def __init__(self, alpha: float = 0.1) -> None:
-        self._krr = KernelRidge(alpha=alpha, kernel="precomputed")
-        self._fitted: bool = False
-
-    def fit(self, features_or_gram: np.ndarray, y: np.ndarray) -> "KernelRidgeLearner":
-        raise NotImplementedError(
-            "KernelRidgeLearner.fit — concrete logic pending approval."
-        )
-
-    def predict(self, features_or_gram: np.ndarray) -> np.ndarray:
-        raise NotImplementedError(
-            "KernelRidgeLearner.predict — concrete logic pending approval."
-        )
+        self.alpha = float(alpha)
+        self._krr = KernelRidge(alpha=self.alpha, kernel="precomputed")
+        self._B_train: Optional[np.ndarray] = None
+        self._fitted = False
 
     @property
-    def coef_(self) -> np.ndarray | None:
+    def coef_(self) -> np.ndarray:
         if not self._fitted:
-            return None
+            raise RuntimeError("KernelRidgeLearner.coef_ called before fit")
         return self._krr.dual_coef_
+
+    def fit(self, B: FeatureMatrix, y: LabelVector) -> "KernelRidgeLearner":
+        B = np.asarray(B, dtype=np.float64)
+        K: GramMatrix = B @ B.T                  # inner-product kernel on Fourier features
+        self._krr.fit(K, y)
+        self._B_train = B
+        self._fitted = True
+        return self
+
+    def predict(self, B: FeatureMatrix) -> LabelVector:
+        if not self._fitted or self._B_train is None:
+            raise RuntimeError("KernelRidgeLearner.predict called before fit")
+        B = np.asarray(B, dtype=np.float64)
+        K_test_train: GramMatrix = B @ self._B_train.T
+        return self._krr.predict(K_test_train)
+    

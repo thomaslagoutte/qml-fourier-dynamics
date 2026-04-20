@@ -54,241 +54,269 @@ the experiment.  It is passed to:
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Literal, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Sequence
 
 import numpy as np
+from scipy.linalg import expm
 
-from ._types import AlphaVector, InputX
-from .circuits.base import CircuitBuilder
-from .features.base import FeatureExtractor
+from ._types import AlphaVector, FeatureMatrix, InputX, LabelVector
+from .circuits.separate_registers import SeparateRegistersBuilder
+from .circuits.shared_register import SharedRegisterBuilder
+from .features.hadamard_b_l import HadamardBLExtractor
+from .features.meshgrid_tensor import MeshgridTensorExtractor
 from .hamiltonians.base import HamiltonianModel
 from .learners.base import Learner
+from .learners.kernel_ridge import KernelRidgeLearner
+from .learners.lasso import LassoLearner
 from .observables.base import Observable
 from .results import ExperimentResult
 
-Method = Literal["lasso-b_l", "lasso-tensor", "kernel-tensor"]
-
-# ``required_d`` encodes the one piece of validation the router needs.
-# Use a callable so we can say "any d > 1" compactly, rather than ==.
-_METHOD_REQUIRES_D: Dict[str, Callable[[int], bool]] = {
-    "lasso-b_l":     lambda d: d == 1,
-    "lasso-tensor":  lambda d: d > 1,
-    "kernel-tensor": lambda d: d > 1,
-}
-
-_METHOD_D_HINT: Dict[str, str] = {
-    "lasso-b_l":     "model.d must equal 1 (shared-register Hadamard-test regime).",
-    "lasso-tensor":  "model.d must be > 1 (separate-registers tensor regime).",
-    "kernel-tensor": "model.d must be > 1 (separate-registers kernel regime).",
-}
-
 
 class Experiment:
-    """High-level PAC-learning experiment orchestrator.
+    """End-to-end PAC learning experiment for quantum dynamics.
 
-    Parameters
-    ----------
-    model : HamiltonianModel
-        Exposes ``num_qubits`` and ``d``.
-    observable : Observable
-        Target observable O = sum_h beta_h P_h.  ``observable.num_qubits``
-        must equal ``model.num_qubits``.
-    method : {"lasso-b_l", "lasso-tensor", "kernel-tensor"}
-        Explicit pipeline selection — no inference from d.  See module
-        docstring for what each method wires.
-    tau : float
-        Total evolution time.
-    r_steps : int
-        First-order Trotter step count.
-    regularization : float, default 0.1
-        L1 strength for Lasso, lambda for KRR.
-    epsilon_b : float, default 0.0
-        Simulated per-coefficient noise for the HadamardBLExtractor.
-    seed : int, default 0
-        Master seed for all stochastic components.  See module docstring.
+    Routing map (method string -> (builder_cls, extractor_cls, learner_cls, allowed_d)):
+        "hadamard_lasso"   : shared  + HadamardBL + Lasso       (d == 1)
+        "meshgrid_lasso"   : separate + Meshgrid + Lasso        (d >  1)
+        "meshgrid_kernel"  : separate + Meshgrid + KernelRidge  (d >  1)
     """
+
+    _METHOD_REQUIRES_D: Dict[str, str] = {
+        "hadamard_lasso": "=1",
+        "meshgrid_lasso": ">1",
+        "meshgrid_kernel": ">1",
+    }
+
+    _GLOBAL_H_CACHE = {}  # Local cache for Hamiltonian matrices during label computation, keyed by input graph configuration.
 
     def __init__(
         self,
         model: HamiltonianModel,
         observable: Observable,
-        method: Method,
+        method: str,
         tau: float,
         r_steps: int,
-        regularization: float = 0.1,
+        *,
+        trotter_order: int = 2,
+        lasso_alpha: float = 1e-3,
+        kernel_alpha: float = 0.1,
         epsilon_b: float = 0.0,
         seed: int = 0,
     ) -> None:
-        # ---- qubit-count sanity ----
-        if observable.num_qubits != model.num_qubits:
-            raise ValueError(
-                f"observable.num_qubits ({observable.num_qubits}) != "
-                f"model.num_qubits ({model.num_qubits})."
-            )
-
-        # ---- method sanity ----
-        if method not in _METHOD_REQUIRES_D:
-            valid = sorted(_METHOD_REQUIRES_D.keys())
-            raise ValueError(f"Unknown method: {method!r}. Valid methods: {valid}.")
-        if not _METHOD_REQUIRES_D[method](model.d):
-            raise ValueError(
-                f"method={method!r} is incompatible with model.d={model.d}. "
-                f"{_METHOD_D_HINT[method]}"
-            )
-
+        self._validate_method_vs_d(method, model.d)
         self.model = model
         self.observable = observable
-        self.method: Method = method
-        self.tau = tau
-        self.r_steps = r_steps
-        self.regularization = regularization
-        self.epsilon_b = epsilon_b
-        self.seed = seed
-        self.rng = np.random.default_rng(seed)
+        self.method = method
+        self.tau = float(tau)
+        self.r_steps = int(r_steps)
+        self.trotter_order = int(trotter_order)
+        self.seed = int(seed)
 
-        # Derive independent child seeds from the master rng so the
-        # extractor noise RNG and the sklearn random_state don't
-        # inadvertently couple with sampling draws in self.rng.
-        ss = np.random.SeedSequence(seed)
-        self._extractor_seed, self._learner_seed = (
-            int(s) for s in ss.generate_state(2, dtype=np.uint32)
+        # Derive independent RNG streams for sampling / extractor / learner.
+        ss = np.random.SeedSequence(self.seed)
+        sampling_seed, extractor_seed, learner_seed = ss.spawn(3)
+        self._sampling_rng = np.random.default_rng(sampling_seed)
+        self._extractor_seed = extractor_seed
+        self._learner_seed = int(learner_seed.generate_state(1)[0])
+
+        # Route to concrete builder + extractor + learner.
+        self.builder, self.extractor, self.learner = self._route(
+            method=method,
+            epsilon_b=epsilon_b,
+            lasso_alpha=lasso_alpha,
+            kernel_alpha=kernel_alpha,
         )
 
-        self.builder, self.extractor, self.learner = self._route()
+        if observable.num_qubits() != model.num_qubits:
+            raise ValueError(
+                f"observable.num_qubits={observable.num_qubits()} does not match "
+                f"model.num_qubits={model.num_qubits}"
+            )
 
-    # ------------------------------------------------------------------
-    # Routing
-    # ------------------------------------------------------------------
+    # ---- routing / validation -------------------------------------------
 
-    def _route(self) -> Tuple[CircuitBuilder, FeatureExtractor, Learner]:
-        """Direct dispatch from ``self.method`` to the concrete triple.
+    @classmethod
+    def _validate_method_vs_d(cls, method: str, d: int) -> None:
+        if method not in cls._METHOD_REQUIRES_D:
+            raise ValueError(f"unknown method {method!r}")
+        req = cls._METHOD_REQUIRES_D[method]
+        if req == "=1" and d != 1:
+            raise ValueError(f"method={method!r} requires d == 1, got d={d}")
+        if req == ">1" and d <= 1:
+            raise ValueError(f"method={method!r} requires d > 1, got d={d}")
 
-        Concrete class imports are lazy so that tests can stub subsystems
-        without eagerly importing Qiskit.  Each factory below receives
-        no extra information beyond ``self`` — the routing logic is
-        purely a method-string → factory lookup.
-        """
-        factories: Dict[str, Callable[[], Tuple[CircuitBuilder, FeatureExtractor, Learner]]] = {
-            "lasso-b_l":     self._build_lasso_b_l,
-            "lasso-tensor":  self._build_lasso_tensor,
-            "kernel-tensor": self._build_kernel_tensor,
-        }
-        return factories[self.method]()
-
-    # --- Factory methods ------------------------------------------------
-
-    def _build_lasso_b_l(self) -> Tuple[CircuitBuilder, FeatureExtractor, Learner]:
-        from .circuits.shared_register import SharedRegisterBuilder
-        from .features.hadamard_b_l import HadamardBLExtractor
-        from .learners.lasso import LassoLearner
-
-        builder = SharedRegisterBuilder()
-        extractor = HadamardBLExtractor(
-            builder,
-            epsilon_b=self.epsilon_b,
-            rng=np.random.default_rng(self._extractor_seed),
-        )
-        learner = LassoLearner(alpha=self.regularization, random_state=self._learner_seed)
+    def _route(self, method, epsilon_b, lasso_alpha, kernel_alpha):
+        if method == "hadamard_lasso":
+            builder = SharedRegisterBuilder(model=self.model, trotter_order=self.trotter_order)
+            extractor = HadamardBLExtractor(
+                builder=builder,
+                epsilon_b=epsilon_b,
+                rng=np.random.default_rng(self._extractor_seed),
+            )
+            learner = LassoLearner(alpha=lasso_alpha, random_state=self._learner_seed)
+        elif method == "meshgrid_lasso":
+            builder = SeparateRegistersBuilder(model=self.model, trotter_order=self.trotter_order)
+            extractor = MeshgridTensorExtractor(
+                builder=builder,
+                rng=np.random.default_rng(self._extractor_seed),
+            )
+            learner = LassoLearner(alpha=lasso_alpha, random_state=self._learner_seed)
+        elif method == "meshgrid_kernel":
+            builder = SeparateRegistersBuilder(model=self.model, trotter_order=self.trotter_order)
+            extractor = MeshgridTensorExtractor(
+                builder=builder,
+                rng=np.random.default_rng(self._extractor_seed),
+            )
+            learner = KernelRidgeLearner(alpha=kernel_alpha)
+        else:
+            raise ValueError(f"unknown method {method!r}")
+        
         return builder, extractor, learner
 
-    def _build_lasso_tensor(self) -> Tuple[CircuitBuilder, FeatureExtractor, Learner]:
-        from .circuits.separate_registers import SeparateRegistersBuilder
-        from .features.meshgrid_tensor import MeshgridTensorExtractor
-        from .learners.lasso import LassoLearner
-
-        builder = SeparateRegistersBuilder()
-        extractor = MeshgridTensorExtractor(builder)
-        learner = LassoLearner(alpha=self.regularization, random_state=self._learner_seed)
-        return builder, extractor, learner
-
-    def _build_kernel_tensor(self) -> Tuple[CircuitBuilder, FeatureExtractor, Learner]:
-        from .circuits.separate_registers import SeparateRegistersBuilder
-        from .features.meshgrid_tensor import MeshgridTensorExtractor
-        from .learners.kernel_ridge import KernelRidgeLearner
-
-        builder = SeparateRegistersBuilder()
-        extractor = MeshgridTensorExtractor(builder)
-        learner = KernelRidgeLearner(alpha=self.regularization)
-        return builder, extractor, learner
-
-    # ------------------------------------------------------------------
-    # Label generation (lives on Experiment per design decision B)
-    # ------------------------------------------------------------------
+    # ---- label computation ----------------------------------------------
 
     def compute_exact_labels(
         self,
-        xs: list,
+        X_list: Sequence[InputX],
         alpha_star: AlphaVector,
-    ) -> np.ndarray:
-        """Exact c_alpha(x) = <0| U^dag O U |0> via dense matrix exponentiation.
+        tau: float,
+    ) -> LabelVector:
+        """Ground-truth labels: y_i = <ψ₀| U†(x_i, α*) O U(x_i, α*) |ψ₀>.
 
-        Used as the reference curve ``y_true_exact`` for evaluation.
+        Dense-matrix path (fine for small n; switch to Statevector for n > ~12).
         """
-        raise NotImplementedError(
-            "Experiment.compute_exact_labels — concrete logic pending approval."
-        )
+        O = self.observable.to_sparse_pauli_op().to_matrix()
+        labels = np.empty(len(X_list), dtype=np.float64)
+        for i, x in enumerate(X_list):
+            U = self.model.exact_unitary(x, alpha_star, tau)
+            psi = U[:, 0]                       # |ψ₀⟩ = |0…0⟩ ⇒ first column
+            labels[i] = np.real(np.conj(psi) @ O @ psi)
+        return labels
 
     def compute_trotter_labels(
         self,
-        xs: list,
+        X_list: Sequence[InputX],
         alpha_star: AlphaVector,
-    ) -> np.ndarray:
-        """A(U)-consistent Trotter labels — the in-convention training target.
+        tau: float,
+        r_steps: int,
+    ) -> LabelVector:
+        """A(U)-consistent Trotter labels.
 
-        Generated through the same A(U) circuit the extractor uses so
-        that training labels match the extractor's internal representation
-        exactly (the invariant flagged in the legacy
-        ``compute_au_labels_inhomogeneous`` docstring).
+        Splits H(x, α) = H_fixed(x) + H_upload(α)  by subtracting H(x, 0):
+            H_fixed  = H(x, α=0)        -- ZZ / mass / electric-field / etc.
+            H_upload = H(x, α) - H_fixed -- Σ_k α_k P_k with physical angle α·τ/r
+
+        Assembles U_step at the same Trotter order as the feature-extraction
+        circuit (self.builder.trotter_order):
+            order == 1 (shared  / first-order):
+                U_step = exp(-i dt H_upload) · exp(-i dt H_fixed)
+                        — matches RZZ(+2dt)·D·G·D per step in SharedRegisterBuilder.
+            order == 2 (separate / symmetric Suzuki-2):
+                U_step = exp(-i dt/2 H_fixed) · exp(-i dt H_upload)
+                       · exp(-i dt/2 H_fixed)
+                        — matches RZZ(+dt)·D·G·D·RZZ(+dt) in SeparateRegistersBuilder.
+        U_trotter = U_step ** r_steps.
         """
-        raise NotImplementedError(
-            "Experiment.compute_trotter_labels — concrete logic pending approval."
-        )
+        O = self.observable.to_sparse_pauli_op().to_matrix()
+        dt = tau / r_steps
+        order = getattr(self.builder, "trotter_order", 1)
 
-    # ------------------------------------------------------------------
-    # End-to-end run
-    # ------------------------------------------------------------------
+        labels = np.empty(len(X_list), dtype=np.float64)
+        
+        # Local cache for Hamiltonian matrices to avoid redundant Qiskit overhead
+        _h_cache = {}
+        zero_alpha = np.zeros(self.model.d, dtype=np.float64)
+
+        for i, x in enumerate(X_list):
+            # Create a hashable key for the input graph configuration
+            x_key = tuple(x) 
+            
+            # Only build the heavy Qiskit matrices if we haven't seen this graph yet
+            if x_key not in _h_cache:
+                H_full   = self.model.hamiltonian(x, alpha_star).to_matrix()
+                H_fixed  = self.model.hamiltonian(x, zero_alpha).to_matrix()
+                _h_cache[x_key] = (H_full, H_fixed)
+            else:
+                H_full, H_fixed = _h_cache[x_key]
+
+            H_upload = H_full - H_fixed
+            U_upload = expm(-1j * dt * H_upload)
+            
+            if order == 1:
+                U_fixed = expm(-1j * dt * H_fixed)
+                U_step  = U_upload @ U_fixed
+            elif order == 2:
+                U_fixed_half = expm(-1j * dt / 2.0 * H_fixed)
+                U_step       = U_fixed_half @ U_upload @ U_fixed_half
+            else:
+                raise ValueError(f"unsupported trotter_order {order}")
+
+            U_trot = np.linalg.matrix_power(U_step, r_steps)
+            psi = U_trot[:, 0]
+            labels[i] = np.real(np.conj(psi) @ O @ psi)
+            
+        return labels
+
+    # ---- feature extraction --------------------------------------------
+
+    def _extract_features(self, X_list: Sequence[InputX]) -> FeatureMatrix:
+        """Stack per-sample feature vectors into (n_samples, n_features)."""
+        rows: List[np.ndarray] = []
+        for x in X_list:
+            b = self.extractor.extract(x, self.tau, self.r_steps, self.observable)
+            rows.append(np.ascontiguousarray(b, dtype=np.float64).ravel())
+        return np.stack(rows, axis=0)
+
+    # ---- full pipeline --------------------------------------------------
 
     def run(self, num_train: int, num_test: int) -> ExperimentResult:
-        """Full PAC pipeline: sample, extract, fit, predict, score.
+        """Sample (α*, X_train, X_test), extract features, fit, predict, score."""
+        # 1. Ground-truth α* and input samples.
+        alpha_star = self.model.sample_alpha(self._sampling_rng)
+        X_train = [self.model.sample_x(self._sampling_rng) for _ in range(num_train)]
+        X_test  = [self.model.sample_x(self._sampling_rng) for _ in range(num_test)]
 
-        Pseudocode (fully expanded in the concrete impl):
+        # 2. Training labels — Trotter (matches what the extractor sees).
+        y_train = self.compute_trotter_labels(X_train, alpha_star, self.tau, self.r_steps)
 
-        1. alpha_star   = model.sample_alpha(self.rng)
-        2. xs_train     = [model.sample_x(self.rng) for _ in range(num_train)]
-           xs_test      = [model.sample_x(self.rng) for _ in range(num_test)]
-        3. y_train          = compute_trotter_labels(xs_train, alpha_star)
-           y_true_trotter   = compute_trotter_labels(xs_test,  alpha_star)
-           y_true_exact     = compute_exact_labels  (xs_test,  alpha_star)
-        4. B_train = extractor.extract_batch(model, xs_train, tau, r_steps, obs, flatten=True)
-           B_test  = extractor.extract_batch(model, xs_test,  tau, r_steps, obs, flatten=True)
-        5. if method == "kernel-tensor":
-               K_train = B_train @ B_train.T
-               K_cross = B_test  @ B_train.T
-               learner.fit(K_train, y_train); y_pred = learner.predict(K_cross)
-           else:  # lasso-b_l or lasso-tensor
-               learner.fit(B_train, y_train); y_pred = learner.predict(B_test)
-        6. Score vs y_true_* and return ExperimentResult.
-        """
-        raise NotImplementedError(
-            "Experiment.run — concrete logic pending approval."
+        # 3. Test ground truth — both exact and Trotter, so we can decompose
+        #    generalization error vs. Trotter-discretization error.
+        y_true_exact   = self.compute_exact_labels  (X_test, alpha_star, self.tau)
+        y_true_trotter = self.compute_trotter_labels(X_test, alpha_star, self.tau, self.r_steps)
+
+        # 4. Features.
+        B_train = self._extract_features(X_train)
+        B_test  = self._extract_features(X_test)
+
+        # 5. Fit and predict.
+        self.learner.fit(B_train, y_train)
+        y_pred = self.learner.predict(B_test)
+
+        # 6. MSEs.
+        mse_exact   = float(np.mean((y_pred - y_true_exact)   ** 2))
+        mse_trotter = float(np.mean((y_pred - y_true_trotter) ** 2))
+
+        return ExperimentResult(
+            y_true_exact   = y_true_exact,
+            y_true_trotter = y_true_trotter,
+            y_pred         = y_pred,
+            mse_exact      = mse_exact,
+            mse_trotter    = mse_trotter,
+            X_test         = X_test,
+            metadata       = {
+                "method":      self.method,
+                "tau":         self.tau,
+                "r_steps":     self.r_steps,
+                "num_qubits":  self.model.num_qubits,
+                "d":           self.model.d,
+                "num_train":   num_train,
+                "num_test":    num_test,
+                "alpha_star":  np.asarray(alpha_star, dtype=np.float64),
+                "seed":        self.seed,
+                "model_cls":   type(self.model).__name__,
+                "observable_cls": type(self.observable).__name__,
+                "builder_cls": type(self.builder).__name__,
+                "trotter_order": getattr(self.builder, "trotter_order", 1),
+            },
         )
-
-    # ------------------------------------------------------------------
-    # Introspection helpers
-    # ------------------------------------------------------------------
-
-    def describe(self) -> Dict[str, Any]:
-        """Configuration bag mirroring what gets attached to ExperimentResult.metadata."""
-        return {
-            "model": repr(self.model),
-            "d": self.model.d,
-            "num_qubits": self.model.num_qubits,
-            "observable": type(self.observable).__name__,
-            "num_pauli_terms": len(self.observable),
-            "method": self.method,
-            "tau": self.tau,
-            "r_steps": self.r_steps,
-            "regularization": self.regularization,
-            "epsilon_b": self.epsilon_b,
-            "seed": self.seed,
-        }

@@ -7,153 +7,144 @@ No circuit construction happens — that is strictly the
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Iterator
 
+from .._types import PauliString
 from .base import Observable, PauliTerm
 
 
-class LocalPauli(Observable):
-    """A single-Pauli observable on ``num_qubits``, e.g. ``Z_0``.
+def _single_site(op: str, site: int, num_qubits: int) -> PauliString:
+    chars = ["I"] * num_qubits
+    chars[num_qubits - 1 - site] = op
+    return "".join(chars)
 
-    Parameters
-    ----------
-    num_qubits : int
-        Number of data qubits in the system.
-    pauli : str
-        Full Qiskit little-endian Pauli string of length ``num_qubits``,
-        e.g. ``"IIIZ"`` for Z on qubit 0 of a 4-qubit system.
-    coefficient : float, default 1.0
+def _two_site(op_i: str, site_i: int, op_j: str, site_j: int, num_qubits: int) -> str: # Or -> PauliString if you have the alias imported
+    """Little-endian two-site Pauli: rightmost char == qubit 0."""
+    chars = ["I"] * num_qubits
+    chars[num_qubits - 1 - site_i] = op_i
+    chars[num_qubits - 1 - site_j] = op_j
+    return "".join(chars)
+
+
+class LocalMagnetization(Observable):
+    """Single-site Pauli-Z: O = Z_site.
+
+    One PauliTerm with coefficient 1. Useful as a minimal baseline observable
+    and as a regression-test fixture for the feature extractors.
     """
 
-    def __init__(self, num_qubits: int, pauli: str, coefficient: float = 1.0) -> None:
-        if len(pauli) != num_qubits:
-            raise ValueError(
-                f"pauli must have length num_qubits={num_qubits}, got {len(pauli)}."
-            )
+    def __init__(self, num_qubits: int, site: int = 0) -> None:
+        if not (0 <= site < num_qubits):
+            raise ValueError(f"site={site} out of range [0, {num_qubits})")
         self._num_qubits = num_qubits
-        self._term = PauliTerm(pauli=pauli, coefficient=coefficient)
+        self.site = site
 
-    @property
     def num_qubits(self) -> int:
         return self._num_qubits
 
-    def terms(self) -> Sequence[PauliTerm]:
-        return (self._term,)
+    def terms(self) -> Iterator[PauliTerm]:
+        yield PauliTerm(
+            pauli=_single_site("Z", self.site, self._num_qubits),
+            coefficient=1.0,
+        )
 
+class TwoPointZZCorrelator(Observable):
+    """Two-site Pauli-ZZ: O = Z_i Z_j.
 
-class LocalZ(LocalPauli):
-    """Z_q observable — single Pauli Z on qubit ``q``."""
+    One PauliTerm with coefficient 1. Measures the spatial correlation
+    between the magnetization of two distinct sites.
+    """
 
-    def __init__(self, num_qubits: int, qubit: int = 0, coefficient: float = 1.0) -> None:
-        if not 0 <= qubit < num_qubits:
-            raise ValueError(f"qubit index {qubit} out of range for {num_qubits} qubits.")
-        pauli = ["I"] * num_qubits
-        pauli[num_qubits - 1 - qubit] = "Z"
-        super().__init__(num_qubits, "".join(pauli), coefficient)
+    def __init__(self, num_qubits: int, site_i: int, site_j: int) -> None:
+        if not (0 <= site_i < num_qubits):
+            raise ValueError(f"site_i={site_i} out of range [0, {num_qubits})")
+        if not (0 <= site_j < num_qubits):
+            raise ValueError(f"site_j={site_j} out of range [0, {num_qubits})")
+        if site_i == site_j:
+            raise ValueError("site_i and site_j must refer to distinct qubits.")
+            
+        self._num_qubits = num_qubits
+        self.site_i = site_i
+        self.site_j = site_j
 
+    def num_qubits(self) -> int:
+        return self._num_qubits
+
+    def terms(self) -> Iterator[PauliTerm]:
+        yield PauliTerm(
+            pauli=_two_site("Z", self.site_i, "Z", self.site_j, self._num_qubits),
+            coefficient=1.0,
+        )
 
 class StaggeredMagnetization(Observable):
-    """Staggered magnetization M_s = kappa * sum_i (-1)^i Z_i.
+    """Staggered magnetization: O = (1/N) Σ_i (-1)^i Z_i.
 
-    Composite observable — exercises the observable-linearity path in
-    :class:`FeatureExtractor`.  Used in notebooks 02 / 03 (TFIM) and in
-    the Schwinger validation for the fermion-sector staggered mass.
-
-    NORMALISATION IS USER-CONTROLLED.  The ``1/N`` prefactor is a
-    cosmetic choice — it changes the absolute magnitude of every b_l(x)
-    and therefore the effective signal-to-noise seen by the regressor.
-    Pick the convention that matches the reference you're comparing
-    against:
-
-    * ``normalize=True``  → kappa = 1/N  (intensive magnetization,
-                            matches notebooks 02 / 03)
-    * ``normalize=False`` → kappa = 1    (extensive sum, matches the
-                            paper's raw definition)
-
-    Parameters
-    ----------
-    num_qubits : int
-        System size N.  The ``(-1)^i`` sign is applied to qubit i.
-    normalize : bool, default True
-        See above.  The default matches the legacy notebooks.
+    N PauliTerms, each weight 1, coefficients ±1/N. Bounded in [-1, 1].
+    Probes antiferromagnetic order. The linearity loop in FeatureExtractor
+    means each Z_i term gets its own A(U, Z_i) circuit and its own statevector
+    read — this is the observable-linearity invariant in action.
     """
 
-    def __init__(self, num_qubits: int, normalize: bool = True) -> None:
+    def __init__(self, num_qubits: int) -> None:
         self._num_qubits = num_qubits
-        self._normalize = normalize
-        prefactor = 1.0 / num_qubits if normalize else 1.0
-        self._terms: tuple[PauliTerm, ...] = tuple(
-            PauliTerm(pauli=self._z_at(num_qubits, i), coefficient=prefactor * ((-1) ** i))
-            for i in range(num_qubits)
-        )
+        self._norm = 1.0 / num_qubits
 
-    @property
-    def normalize(self) -> bool:
-        """Whether the ``1/N`` intensive prefactor is applied."""
-        return self._normalize
-
-    @staticmethod
-    def _z_at(num_qubits: int, qubit: int) -> str:
-        pauli = ["I"] * num_qubits
-        pauli[num_qubits - 1 - qubit] = "Z"
-        return "".join(pauli)
-
-    @property
     def num_qubits(self) -> int:
         return self._num_qubits
 
-    def terms(self) -> Sequence[PauliTerm]:
-        return self._terms
-
+    def terms(self) -> Iterator[PauliTerm]:
+        for i in range(self._num_qubits):
+            sign = -1.0 if (i % 2) else 1.0
+            yield PauliTerm(
+                pauli=_single_site("Z", i, self._num_qubits),
+                coefficient=self._norm * sign,
+            )
 
 class ElectricFlux(Observable):
-    """Gauge-link electric flux for the Schwinger Z2 model.
-
-    On the interlaced (matter, link, matter, link, …) qubit layout the
-    gauge links live on odd qubits.  The electric flux observable is
-    ``kappa * sum_i X_{l_i}`` where ``l_i`` is the i-th gauge-link qubit.
-
-    NORMALISATION IS USER-CONTROLLED (same rationale as
-    :class:`StaggeredMagnetization`):
-
-    * ``normalize=True``  → kappa = 1 / L   (intensive, matches notebook 04)
-    * ``normalize=False`` → kappa = 1       (extensive)
-
-    Parameters
-    ----------
-    num_matter_sites : int
-        N matter sites ⇒ N-1 gauge links ⇒ 2N-1 total data qubits.
-    normalize : bool, default True
+    """Electric flux on a specific gauge link: O = X_{link_l}.
+    
+    In the Schwinger model, gauge links are located at odd qubit indices:
+    link_qubit = 2 * link_index + 1.
     """
+    def __init__(self, num_qubits: int, link_index: int = 0) -> None:
+        self._num_qubits = num_qubits
+        self.link_index = link_index
+        self.link_qubit = 2 * link_index + 1
+        
+        if not (0 <= self.link_qubit < num_qubits):
+            raise ValueError(f"link_index={link_index} (qubit {self.link_qubit}) out of range [0, {num_qubits})")
 
-    def __init__(self, num_matter_sites: int, normalize: bool = True) -> None:
-        num_gauge = num_matter_sites - 1
-        total = num_matter_sites + num_gauge
-        self._normalize = normalize
-        prefactor = 1.0 / num_gauge if (normalize and num_gauge > 0) else 1.0
-        self._num_qubits = total
-        self._terms = tuple(
-            PauliTerm(
-                pauli=self._x_at(total, 2 * i + 1),
-                coefficient=prefactor,
-            )
-            for i in range(num_gauge)
-        )
-
-    @property
-    def normalize(self) -> bool:
-        """Whether the ``1/L`` intensive prefactor is applied."""
-        return self._normalize
-
-    @staticmethod
-    def _x_at(num_qubits: int, qubit: int) -> str:
-        pauli = ["I"] * num_qubits
-        pauli[num_qubits - 1 - qubit] = "X"
-        return "".join(pauli)
-
-    @property
     def num_qubits(self) -> int:
         return self._num_qubits
 
-    def terms(self) -> Sequence[PauliTerm]:
-        return self._terms
+    def terms(self) -> Iterator[PauliTerm]:
+        yield PauliTerm(
+            pauli=_single_site("X", self.link_qubit, self._num_qubits),
+            coefficient=1.0,
+        )
+
+class LocalPauli(Observable):
+    """Single-site Pauli observable: O = P_site (where P is 'X', 'Y', or 'Z').
+    
+    A more generic version of LocalMagnetization that allows any Pauli operator.
+    """
+    def __init__(self, num_qubits: int, op: str, site: int = 0) -> None:
+        if op not in ("I", "X", "Y", "Z"):
+            raise ValueError(f"op must be one of 'I', 'X', 'Y', 'Z', got {op}")
+        if not (0 <= site < num_qubits):
+            raise ValueError(f"site={site} out of range [0, {num_qubits})")
+        
+        self._num_qubits = num_qubits
+        self.op = op
+        self.site = site
+
+    def num_qubits(self) -> int:
+        return self._num_qubits
+
+    def terms(self) -> Iterator[PauliTerm]:
+        yield PauliTerm(
+            pauli=_single_site(self.op, self.site, self._num_qubits),
+            coefficient=1.0,
+        )
+
+LocalZ = LocalMagnetization

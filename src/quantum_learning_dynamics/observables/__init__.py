@@ -7,6 +7,7 @@ __all__ = [
     "ElectricFlux",
     "LocalPauli",
     "LocalZ",
+    "TwoPointZZCorrelator",
     "Observable",
     "PauliTerm",
     "StaggeredMagnetization",

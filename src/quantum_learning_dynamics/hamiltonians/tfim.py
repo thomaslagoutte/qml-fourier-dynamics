@@ -19,77 +19,124 @@ skeleton is approved.  Each method currently raises
 
 from __future__ import annotations
 
+import itertools
 from typing import List, Tuple
 
 import numpy as np
 from qiskit.quantum_info import SparsePauliOp
 
+from .._types import AlphaVector, InputX, PauliString
 from .base import HamiltonianModel
 
-EdgeList = List[Tuple[int, int]]
+
+def _single_site(op: str, site: int, num_qubits: int) -> str:
+    """Little-endian Pauli: rightmost char == qubit 0."""
+    chars = ["I"] * num_qubits
+    chars[num_qubits - 1 - site] = op
+    return "".join(chars)
+
+
+def _two_site(op_i: str, i: int, op_j: str, j: int, num_qubits: int) -> str:
+    chars = ["I"] * num_qubits
+    chars[num_qubits - 1 - i] = op_i
+    chars[num_qubits - 1 - j] = op_j
+    return "".join(chars)
 
 
 class TFIM(HamiltonianModel):
-    """TFIM with a single homogeneous transverse field alpha.
+    """Homogeneous transverse-field Ising model, d = 1.
 
-        H(x, alpha) = sum_{(i,j) in x} Z_i Z_j  +  alpha * sum_i X_i
-
-    Known input ``x`` is a list of graph edges ``[(i, j), ...]`` with
-    0 <= i < j < num_qubits.  The unknown parameter alpha is a scalar.
-
-    This is the d = 1 regime of the paper (Section VI.A) — learned via
-    the shared-register A(U, P) circuit and Lasso on b_l(x).
+        H(x, α) = Σ_{(i,j) ∈ x} Z_i Z_j  +  α · Σ_i X_i
     """
 
-    def __init__(self, num_qubits: int) -> None:
+    def __init__(
+        self,
+        num_qubits: int,
+        edge_prob: float = 0.5,
+        alpha_range: Tuple[float, float] = (0.5, 1.5),
+    ) -> None:
+        if num_qubits < 2:
+            raise ValueError(f"TFIM requires num_qubits >= 2, got {num_qubits}")
         self.num_qubits = num_qubits
         self.d = 1
+        self.edge_prob = float(edge_prob)
+        self.alpha_range = alpha_range
 
-    def generate_hamiltonian(self, x: EdgeList, alpha: float) -> SparsePauliOp:
-        raise NotImplementedError("TFIM.generate_hamiltonian — concrete logic pending approval.")
+    @property
+    def upload_paulis(self) -> List[PauliString]:
+        # d = 1 but each of the n qubits carries the SAME α — the shared-register
+        # builder iterates internally. We expose a canonical length-1 single-qubit
+        # upload so multi-qubit-parity logic stays off for TFIM.
+        return [_single_site("X", i, self.num_qubits) for i in range(self.num_qubits)]
 
-    def exact_unitary(self, x: EdgeList, alpha: float, tau: float) -> np.ndarray:
-        raise NotImplementedError("TFIM.exact_unitary — concrete logic pending approval.")
+    def hamiltonian(self, x: InputX, alpha: AlphaVector) -> SparsePauliOp:
+        if len(alpha) != 1:
+            raise ValueError(f"TFIM expects |α| == 1, got {len(alpha)}")
+        a = float(alpha[0])
+        n = self.num_qubits
+        terms: List[Tuple[str, float]] = []
+        for (i, j) in x:
+            terms.append((_two_site("Z", i, "Z", j, n), 1.0))
+        for i in range(n):
+            terms.append((_single_site("X", i, n), a))
+        return SparsePauliOp.from_list(terms)
 
-    def sample_x(self, rng: np.random.Generator) -> EdgeList:
-        raise NotImplementedError("TFIM.sample_x — concrete logic pending approval.")
+    def sample_x(self, rng: np.random.Generator) -> InputX:
+        return [
+            (i, j)
+            for (i, j) in itertools.combinations(range(self.num_qubits), 2)
+            if rng.random() < self.edge_prob
+        ]
 
-    def sample_alpha(self, rng: np.random.Generator) -> float:
-        raise NotImplementedError("TFIM.sample_alpha — concrete logic pending approval.")
+    def sample_alpha(self, rng: np.random.Generator) -> AlphaVector:
+        lo, hi = self.alpha_range
+        return rng.uniform(lo, hi, size=1)
 
 
 class InhomogeneousTFIM(HamiltonianModel):
-    """TFIM with per-qubit unknown transverse fields.
+    """Per-qubit transverse field, d = num_qubits.
 
-        H(x, alpha) = sum_{(i,j) in x} Z_i Z_j  +  sum_i alpha_i X_i
-
-    ``x`` is a graph edge list; ``alpha`` is a 1-D array of shape (n,)
-    where n = num_qubits.  This places the model in the d = n regime
-    (Section VI.B) — learned via the separate-registers circuit plus
-    either the full Fourier tensor + Lasso or the quantum overlap kernel
-    + Kernel Ridge Regression.
+        H(x, α) = Σ_{(i,j) ∈ x} Z_i Z_j  +  Σ_i α_i X_i
     """
 
-    def __init__(self, num_qubits: int) -> None:
+    def __init__(
+        self,
+        num_qubits: int,
+        edge_prob: float = 0.5,
+        alpha_range: Tuple[float, float] = (0.5, 1.5),
+    ) -> None:
+        if num_qubits < 2:
+            raise ValueError(f"InhomogeneousTFIM requires num_qubits >= 2, got {num_qubits}")
         self.num_qubits = num_qubits
-        self.d = num_qubits  # one unknown alpha_i per qubit
+        self.d = num_qubits
+        self.edge_prob = float(edge_prob)
+        self.alpha_range = alpha_range
 
-    def generate_hamiltonian(self, x: EdgeList, alpha: np.ndarray) -> SparsePauliOp:
-        raise NotImplementedError(
-            "InhomogeneousTFIM.generate_hamiltonian — concrete logic pending approval."
-        )
+    @property
+    def upload_paulis(self) -> List[PauliString]:
+        # One weight-1 X upload per qubit, ordered by qubit index.
+        return [_single_site("X", i, self.num_qubits) for i in range(self.num_qubits)]
 
-    def exact_unitary(self, x: EdgeList, alpha: np.ndarray, tau: float) -> np.ndarray:
-        raise NotImplementedError(
-            "InhomogeneousTFIM.exact_unitary — concrete logic pending approval."
-        )
+    def hamiltonian(self, x: InputX, alpha: AlphaVector) -> SparsePauliOp:
+        if len(alpha) != self.num_qubits:
+            raise ValueError(
+                f"InhomogeneousTFIM expects |α| == {self.num_qubits}, got {len(alpha)}"
+            )
+        n = self.num_qubits
+        terms: List[Tuple[str, float]] = []
+        for (i, j) in x:
+            terms.append((_two_site("Z", i, "Z", j, n), 1.0))
+        for i in range(n):
+            terms.append((_single_site("X", i, n), float(alpha[i])))
+        return SparsePauliOp.from_list(terms)
 
-    def sample_x(self, rng: np.random.Generator) -> EdgeList:
-        raise NotImplementedError(
-            "InhomogeneousTFIM.sample_x — concrete logic pending approval."
-        )
+    def sample_x(self, rng: np.random.Generator) -> InputX:
+        return [
+            (i, j)
+            for (i, j) in itertools.combinations(range(self.num_qubits), 2)
+            if rng.random() < self.edge_prob
+        ]
 
-    def sample_alpha(self, rng: np.random.Generator) -> np.ndarray:
-        raise NotImplementedError(
-            "InhomogeneousTFIM.sample_alpha — concrete logic pending approval."
-        )
+    def sample_alpha(self, rng: np.random.Generator) -> AlphaVector:
+        lo, hi = self.alpha_range
+        return rng.uniform(lo, hi, size=self.num_qubits)

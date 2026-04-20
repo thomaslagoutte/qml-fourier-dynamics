@@ -92,7 +92,6 @@ class FeatureExtractor(ABC):
     @abstractmethod
     def extract_single_pauli(
         self,
-        model: HamiltonianModel,
         x: InputX,
         tau: float,
         r_steps: int,
@@ -121,7 +120,6 @@ class FeatureExtractor(ABC):
     @final
     def extract(
         self,
-        model: HamiltonianModel,
         x: InputX,
         tau: float,
         r_steps: int,
@@ -135,7 +133,7 @@ class FeatureExtractor(ABC):
         """
         tensor: FeatureTensor | None = None
         for term in observable.terms():
-            b_h = self.extract_single_pauli(model, x, tau, r_steps, term.pauli)
+            b_h = self.extract_single_pauli(x, tau, r_steps, term.pauli)
             contribution = term.coefficient * b_h
             tensor = contribution if tensor is None else tensor + contribution
         if tensor is None:  # pragma: no cover — Observable.terms() non-empty by contract
@@ -145,7 +143,6 @@ class FeatureExtractor(ABC):
     @final
     def extract_batch(
         self,
-        model: HamiltonianModel,
         xs: Sequence[InputX],
         tau: float,
         r_steps: int,
@@ -162,7 +159,7 @@ class FeatureExtractor(ABC):
             by sklearn's Lasso / KernelRidge.  If False, returns a rank
             ``1 + d`` array with sample index on axis 0.
         """
-        tensors = [self.extract(model, x, tau, r_steps, observable) for x in xs]
+        tensors = [self.extract(x, tau, r_steps, observable) for x in xs]
         if flatten:
             return np.stack([t.ravel() for t in tensors])
         return np.stack(tensors)
