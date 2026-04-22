@@ -1,18 +1,4 @@
-"""Result dataclass returned by :meth:`Experiment.run`.
-
-Holds the three aligned curves — exact reference dynamics, Trotterised
-reference dynamics, and the PAC-learned predictor — together with error
-metrics and a metadata bag describing the run.  Naming uses standard ML
-semantics: ``y_true_*`` for ground-truth curves, ``y_pred`` for learner
-predictions.
-
-The ``X_test`` slot is reserved for the held-out sample inputs (e.g. the
-edge lists for TFIM or gauge masks for Schwinger).  It is optional so
-the runner can omit it for large experiments where the inputs are
-reconstructible from the seed.  Downstream notebooks that want to plot
-predictions vs. a scalar x-axis should populate ``metadata`` with the
-x-axis array instead.
-"""
+"""Data structures for experiment results and metrics."""
 
 from __future__ import annotations
 
@@ -26,31 +12,27 @@ from ._types import InputX
 
 @dataclass
 class ExperimentResult:
-    """Three aligned PAC curves plus errors, inputs, and metadata.
+    """Encapsulates the outputs, predictions, and metrics of a PAC-learning experiment.
 
     Attributes
     ----------
     y_true_exact : np.ndarray
-        Exact dynamics labels c_alpha(x_test) computed from the dense
-        unitary ``exp(i tau H)``.  Shape ``(num_test,)``.
+        Exact ground-truth dynamics :math:`c_\\alpha(x_i)` computed via dense 
+        unitary exponentiation. Shape: ``(num_test,)``.
     y_true_trotter : np.ndarray
-        A(U)-consistent Trotter labels — the in-convention training
-        target used by the learner.  Shape ``(num_test,)``.
+        Trotterized ground-truth dynamics. Acts as the in-convention training 
+        target for the learner. Shape: ``(num_test,)``.
     y_pred : np.ndarray
-        Predictions from the fitted PAC learner.  Shape ``(num_test,)``.
+        Dynamics predicted by the fitted classical PAC learner. Shape: ``(num_test,)``.
     mse_exact : float
-        Mean-squared error of ``y_pred`` against ``y_true_exact`` —
-        the physically meaningful generalisation error.
+        Mean-squared error of ``y_pred`` evaluated against ``y_true_exact``.
     mse_trotter : float
-        Mean-squared error of ``y_pred`` against ``y_true_trotter`` —
-        the in-convention PAC error the paper's bounds talk about.
-    X_test : list, optional
-        Held-out sample inputs (e.g. edge lists for TFIM, gauge masks
-        for Schwinger).  ``None`` if the caller chose not to retain them.
-    metadata : dict
-        Run configuration and instrumentation: ``d``, ``method``,
-        ``r_steps``, ``tau``, ``num_train``, ``num_test``,
-        ``regularization``, ``seed``, timings, etc.  Informational only.
+        Mean-squared error of ``y_pred`` evaluated against ``y_true_trotter``.
+    X_test : List[InputX], optional
+        The held-out sample inputs utilized for testing.
+    metadata : Dict[str, Any]
+        Configuration dictionary recording model dimension, method, steps, 
+        regularization constraints, and seeds.
     """
 
     y_true_exact: np.ndarray
@@ -62,9 +44,7 @@ class ExperimentResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __repr__(self) -> str:
-        n = len(self.y_pred)
         return (
-            f"ExperimentResult(n_test={n}, "
-            f"mse_exact={self.mse_exact:.3e}, "
-            f"mse_trotter={self.mse_trotter:.3e})"
+            f"ExperimentResult(mse_exact={self.mse_exact:.6e}, "
+            f"mse_trotter={self.mse_trotter:.6e})"
         )

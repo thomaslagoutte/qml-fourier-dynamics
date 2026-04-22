@@ -1,11 +1,14 @@
-"""Feature extractors — turn A(U, P) circuits into real Fourier tensors."""
+"""Quantum execution engines for feature extraction and kernel evaluation.
 
-from .base import FeatureExtractor
-from .hadamard_b_l import HadamardBLExtractor
-from .meshgrid_tensor import MeshgridTensorExtractor
+This module exposes the unified execution layer for the PAC-learning framework.
+It handles the translation of high-level feature or kernel requests into
+quantum circuit evaluations across exact statevectors, noisy emulators, and
+physical QPUs.
+"""
+
+from .engines import FeatureEngine, KernelEngine
 
 __all__ = [
-    "FeatureExtractor",
-    "HadamardBLExtractor",
-    "MeshgridTensorExtractor",
+    "FeatureEngine",
+    "KernelEngine",
 ]

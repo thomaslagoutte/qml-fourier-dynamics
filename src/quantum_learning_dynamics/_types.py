@@ -1,9 +1,4 @@
-"""Shared type aliases used across the package.
-
-Centralising these keeps the public surface consistent and makes
-``mypy --strict`` happier.  Everything here is deliberately tiny — if a type
-needs validation or invariants it should become a real class, not an alias.
-"""
+"""Core type aliases used throughout the package for static analysis."""
 
 from __future__ import annotations
 
@@ -12,59 +7,46 @@ from typing import Any, TypeAlias
 import numpy as np
 
 # -----------------------------------------------------------------------------
-# Pauli / observable
+# Quantum State & Operators
 # -----------------------------------------------------------------------------
 
 PauliString: TypeAlias = str
-"""A Qiskit little-endian Pauli string.
+"""A Qiskit little-endian Pauli string. 
 
-Convention (matches Qiskit and the legacy code): the *rightmost* character
-acts on qubit 0.  Example for 4 qubits: ``"IIIZ"`` is Z on qubit 0.
+Convention: The rightmost character acts on qubit 0 (e.g., "IIIZ" applies Z on qubit 0).
 """
 
 # -----------------------------------------------------------------------------
-# Input sample x
+# Mathematical Inputs & Parameters
 # -----------------------------------------------------------------------------
 
 InputX: TypeAlias = Any
-"""The 'known' part of the Hamiltonian, x in H(x, alpha).
+"""The known structural encoding of the Hamiltonian, :math:`x` in :math:`H(x, \\alpha)`.
 
-Deliberately ``Any`` because the paper treats x as a generic
-problem-dependent encoding.  Concrete :class:`HamiltonianModel` subclasses
-spell out their own format in the class docstring, e.g.
-
-* :class:`TFIM` / :class:`InhomogeneousTFIM` — ``list[tuple[int, int]]``
-  of graph edges.
-* :class:`SchwingerZ2Model` — ``list[int]`` gauge-link activation mask.
+The concrete data structure varies by :class:`HamiltonianModel`. For example:
+- Transverse-Field Ising Models: ``List[Tuple[int, int]]`` representing graph edges.
+- Schwinger Models: ``List[bool]`` representing gauge-link activation masks.
 """
-
-# -----------------------------------------------------------------------------
-# Parameter vector alpha (the unknown to be PAC-learned)
-# -----------------------------------------------------------------------------
 
 AlphaVector: TypeAlias = "np.ndarray | float"
-"""The unknown parameter vector alpha of length d.
+"""The continuous, unknown parameter vector :math:`\\alpha` of dimension :math:`d`.
 
-When ``d == 1`` this is a plain scalar; when ``d > 1`` a 1-D ``np.ndarray``
-of shape ``(d,)``.  The :class:`HamiltonianModel.d` attribute is the
-source of truth.
+When :math:`d = 1`, this is evaluated as a scalar float. When :math:`d > 1`, 
+it is a 1-D ``np.ndarray`` of shape ``(d,)``.
 """
 
 # -----------------------------------------------------------------------------
-# Labels and features
+# Machine Learning Data Structures
 # -----------------------------------------------------------------------------
 
 LabelVector: TypeAlias = np.ndarray
-"""1-D array of shape ``(num_samples,)`` of real-valued target scalars
-c_alpha(x_i) = <psi_0 | U(x_i, alpha)^dag O U(x_i, alpha) | psi_0>."""
+"""1-D array of shape ``(num_samples,)`` containing real-valued target scalars."""
 
 FeatureTensor: TypeAlias = np.ndarray
-"""Rank-d tensor of shape ``(4r+1,) * d`` of real Fourier coefficients
-b_l(x) for a single sample x.  The learner chooses whether to flatten."""
+"""Rank-:math:`d` tensor of shape ``(4r+1, ..., 4r+1)`` containing Fourier coefficients."""
 
 FeatureMatrix: TypeAlias = np.ndarray
-"""2-D array of shape ``(num_samples, (4r+1)**d)`` produced by
-:meth:`FeatureExtractor.extract_batch` when ``flatten=True``."""
+"""2-D array of shape ``(num_samples, (4r+1)**d)`` containing flattened feature tensors."""
 
 GramMatrix: TypeAlias = np.ndarray
-"""Square ``(N, N)`` precomputed kernel K_ij = <b(x_i), b(x_j)>."""
+"""2-D array containing pairwise overlap evaluations :math:`K(x_i, x_j)`."""
