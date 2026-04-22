@@ -1,4 +1,4 @@
-"""Abstract learner — fits a regressor on features or a precomputed Gram matrix."""
+"""Abstract base class for PAC-learning regressors."""
 
 from __future__ import annotations
 
@@ -8,30 +8,60 @@ import numpy as np
 
 
 class Learner(ABC):
-    """PAC regressor wrapping an sklearn estimator.
+    """Abstract PAC regressor wrapping an underlying ``scikit-learn`` estimator.
 
-    Two concrete subclasses:
-
-    * :class:`LassoLearner`       — fits :class:`sklearn.linear_model.Lasso`
-      directly on the flattened Fourier feature matrix.
-    * :class:`KernelRidgeLearner` — fits
-      :class:`sklearn.kernel_ridge.KernelRidge` with ``kernel='precomputed'``
-      on the Gram matrix K = B @ B.T.
-
-    The methods take either a feature matrix or a Gram matrix depending on
-    the concrete subclass — :class:`Experiment` wires them consistently.
+    Defines the standard interface for fitting and predicting quantum dynamics 
+    data. Depending on the concrete subclass, the input array may represent 
+    either an explicit feature matrix or a pairwise Gram matrix.
     """
 
     @abstractmethod
-    def fit(self, features_or_gram: np.ndarray, y: np.ndarray) -> "Learner": ...
+    def fit(self, features_or_gram: np.ndarray, y: np.ndarray) -> "Learner":
+        """Fits the regression model to the training data.
+
+        Parameters
+        ----------
+        features_or_gram : np.ndarray
+            The training input data. May be a feature matrix of shape 
+            ``(n_samples, n_features)`` or a Gram matrix of shape 
+            ``(n_samples, n_samples)``.
+        y : np.ndarray
+            The target values (labels) of shape ``(n_samples,)``.
+
+        Returns
+        -------
+        Learner
+            The fitted learner instance.
+        """
+        pass
 
     @abstractmethod
-    def predict(self, features_or_gram: np.ndarray) -> np.ndarray: ...
+    def predict(self, features_or_gram: np.ndarray) -> np.ndarray:
+        """Predicts target values for the given test data.
+
+        Parameters
+        ----------
+        features_or_gram : np.ndarray
+            The test input data. May be a feature matrix of shape 
+            ``(n_test, n_features)`` or a test-vs-train Gram matrix of 
+            shape ``(n_test, n_train)``.
+
+        Returns
+        -------
+        np.ndarray
+            The predicted values of shape ``(n_test,)``.
+        """
+        pass
 
     @property
     @abstractmethod
     def coef_(self) -> np.ndarray | None:
-        """Learned weight vector (Lasso) or dual coefficients (KRR).
+        """Retrieves the learned coefficients.
 
-        Returns ``None`` before :meth:`fit` has been called.
+        Returns
+        -------
+        np.ndarray or None
+            The learned weight vector (for Lasso) or dual coefficients 
+            (for Kernel Ridge). Returns ``None`` if the model is not yet fitted.
         """
+        pass

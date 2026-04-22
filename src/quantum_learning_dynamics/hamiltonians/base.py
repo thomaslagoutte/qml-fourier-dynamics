@@ -1,14 +1,4 @@
-"""Abstract base class for parameterised Hamiltonians H(x, alpha).
-
-The paper's learning target is the concept class
-
-    c_alpha(x) = <psi_0 | U(x, alpha)^dag O U(x, alpha) | psi_0>
-
-where x is a *known* (observed) encoding of the Hamiltonian graph / mask and
-alpha is the *unknown* parameter vector of length d.  This ABC centralises
-the definition of (x, alpha, d, num_qubits) and provides hooks for
-reference computations (exact unitary, random sampling).
-"""
+"""Abstract base class for parameterized physical Hamiltonians."""
 
 from __future__ import annotations
 
@@ -23,46 +13,88 @@ from .._types import AlphaVector, InputX, PauliString
 
 
 class HamiltonianModel(ABC):
-    """Abstract base for physical Hamiltonian families H(x, α).
+    """Abstract base class defining physical Hamiltonian families :math:`H(x, \\alpha)`.
 
-    Contract:
-        num_qubits    : int                  -- size of the data register
-        d             : int                  -- # of independent unknown parameters (|α|)
-        upload_paulis : List[PauliString]    -- weight-k Pauli string per α_k, length == d.
-                                                Tells the CircuitBuilder what the D block
-                                                needs to parity-fold onto anc[0] before
-                                                the frequency shift. For single-qubit
-                                                uploads (TFIM) weight is 1; for Z₂
-                                                Schwinger it's 3 (XZX).
+    This class serves as the interface between the physical system and the
+    quantum circuit builders. It encapsulates the system size, the dimension
+    of the unknown parameter space, and the specific Pauli terms required to
+    encode the parameters into the quantum circuit.
 
-    The `exact_unitary(x, α, τ) = exp(-i H(x, α) τ)` default implementation is
-    dense-matrix; fine for small n, override for large n if needed.
+    Attributes
+    ----------
+    num_qubits : int
+        The total number of qubits required to simulate the data register.
+    d : int
+        The dimensionality of the unknown parameter vector :math:`\\alpha`.
     """
 
-    # subclass must set these in __init__
     num_qubits: int
     d: int
-
-    # --- abstract interface ------------------------------------------------
 
     @property
     @abstractmethod
     def upload_paulis(self) -> List[PauliString]:
-        """One Pauli string per α component, in the order α is indexed."""
+        """The Pauli operators corresponding to the unknown parameters.
+
+        Returns
+        -------
+        List[PauliString]
+            A list of length ``d`` containing the Pauli string associated with
+            each component of :math:`\\alpha`. For single-qubit uploads (e.g., TFIM),
+            these are weight-1 operators. For gauge theories (e.g., Schwinger),
+            these may be multi-qubit operators (e.g., XZX).
+        """
+        pass
 
     @abstractmethod
     def hamiltonian(self, x: InputX, alpha: AlphaVector) -> SparsePauliOp:
-        """Full H(x, α) as a SparsePauliOp on `num_qubits` qubits."""
+        """Constructs the full Hamiltonian observable.
+
+        Parameters
+        ----------
+        x : InputX
+            The structural input or graph configuration.
+        alpha : AlphaVector
+            The continuous parameter vector of length ``d``.
+
+        Returns
+        -------
+        SparsePauliOp
+            The parameterized Hamiltonian acting on ``num_qubits``.
+        """
+        pass
 
     @abstractmethod
     def sample_x(self, rng: np.random.Generator) -> InputX:
-        """Sample a fresh input x from the model's training distribution."""
+        """Samples a structural configuration from the model's distribution.
+
+        Parameters
+        ----------
+        rng : np.random.Generator
+            The random number generator instance.
+
+        Returns
+        -------
+        InputX
+            A valid structural input for this Hamiltonian.
+        """
+        pass
 
     @abstractmethod
     def sample_alpha(self, rng: np.random.Generator) -> AlphaVector:
-        """Sample a fresh α vector of length d."""
+        """Samples a parameter vector from the model's valid domain.
 
-    # --- concrete helpers --------------------------------------------------
+        Parameters
+        ----------
+        rng : np.random.Generator
+            The random number generator instance.
+
+        Returns
+        -------
+        AlphaVector
+            An array of length ``d`` representing the continuous parameters.
+        """
+        pass
 
     def exact_unitary(
         self,
@@ -70,6 +102,25 @@ class HamiltonianModel(ABC):
         alpha: AlphaVector,
         tau: float,
     ) -> np.ndarray:
-        """Dense U(x, α) = exp(-i τ H(x, α))."""
-        H = self.hamiltonian(x, alpha).to_matrix()
-        return expm(-1j * tau * H)
+        """Computes the exact dense unitary matrix for the time evolution.
+
+        Computes :math:`U(x, \\alpha) = \\exp(-i \\tau H(x, \\alpha))`. This
+        is utilized by the emulator for noiseless baseline comparisons.
+
+        Parameters
+        ----------
+        x : InputX
+            The structural input or graph configuration.
+        alpha : AlphaVector
+            The continuous parameter vector.
+        tau : float
+            The evolution time.
+
+        Returns
+        -------
+        np.ndarray
+            A dense complex unitary matrix of shape ``(2^n, 2^n)``.
+        """
+        H = self.hamiltonian(x, alpha)
+        H_mat = H.to_matrix()
+        return expm(-1j * tau * H_mat)

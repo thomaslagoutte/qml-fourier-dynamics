@@ -1,4 +1,4 @@
-"""Lasso learner — fits sklearn.linear_model.Lasso on Fourier features."""
+"""L1-regularized linear regression for explicit Fourier feature matrices."""
 
 from __future__ import annotations
 
@@ -12,11 +12,23 @@ from .base import Learner
 
 
 class LassoLearner(Learner):
-    """L1-regularized linear regression on the Fourier feature matrix.
+    """L1-regularized linear regression on the Fourier feature space.
 
-    Thin wrapper around sklearn.linear_model.Lasso with fit_intercept=False
-    — the Fourier-feature basis already spans the constant mode (l = 0), so
-    forcing no intercept avoids double-counting it.
+    Acts as a thin wrapper around :class:`sklearn.linear_model.Lasso`. By 
+    default, ``fit_intercept`` is set to ``False`` because the Fourier feature 
+    basis inherently spans the constant mode (:math:`l = 0`). Forcing the intercept 
+    to zero prevents collinearity and double-counting of the zero-frequency term.
+
+    Parameters
+    ----------
+    alpha : float, default=1e-3
+        The L1 regularization penalty parameter.
+    fit_intercept : bool, default=False
+        Whether to calculate the intercept for this model.
+    max_iter : int, default=10_000
+        The maximum number of iterations for the solver.
+    random_state : int, optional
+        Seed for the random number generator used by the coordinate descent solver.
     """
 
     def __init__(
@@ -30,6 +42,7 @@ class LassoLearner(Learner):
         self.fit_intercept = bool(fit_intercept)
         self.max_iter = int(max_iter)
         self.random_state = random_state
+        
         self._lasso = Lasso(
             alpha=self.alpha,
             fit_intercept=self.fit_intercept,
@@ -53,4 +66,3 @@ class LassoLearner(Learner):
         if not self._fitted:
             raise RuntimeError("LassoLearner.predict called before fit")
         return self._lasso.predict(B)
-    

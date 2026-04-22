@@ -1,10 +1,9 @@
-"""Abstract base class for Hermitian observables O = sum_h beta_h P_h.
+"""Abstract base class for Hermitian observables.
 
-Observables are *explicitly* exposed as a list of (Pauli string, coefficient)
-terms.  The :class:`FeatureExtractor` iterates over these terms and sums
-the per-term feature tensors classically — never folds them into a single
-``SparsePauliOp`` passed to Qiskit.  See
-:mod:`quantum_learning_dynamics.features.base` for why.
+Observables are explicitly decomposed into a sum of Pauli operators:
+:math:`O = \\sum_h c_h P_h`. This decomposition is mathematically required 
+because the Fourier extraction circuit :math:`A(U, P_h)` can only encode a 
+single Pauli operator per evaluation.
 """
 
 from __future__ import annotations
@@ -20,33 +19,56 @@ from .._types import PauliString
 
 @dataclass(frozen=True)
 class PauliTerm:
-    """One real-coefficient Pauli term in an observable's linear decomposition."""
+    """A single weighted Pauli operator in an observable's decomposition.
+    
+    Attributes
+    ----------
+    pauli : PauliString
+        The string representation of the Pauli operator (e.g., "IXY").
+    coefficient : float
+        The real-valued coefficient weighting this term.
+    """
     pauli: PauliString
     coefficient: float
 
 
 class Observable(ABC):
-    """Observable expressed as O = Σ_h c_h · P_h (real coefficients).
+    """Abstract base class for physical observables.
 
-    The `terms()` iterator EXPOSES the decomposition. This is load-bearing:
-    FeatureExtractor.extract iterates the terms and sums
-        feature(x) = Σ_h c_h · b_h(x)
-    where each b_h is extracted from an A(U, P_h) circuit built from ONE Pauli
-    string. Composite observables must NEVER be folded into a single
-    SparsePauliOp for extraction — that would break the statevector-amplitude
-    indexing that the extractors rely on.
+    Defines an observable strictly as a linear combination of Pauli strings.
+    The `terms()` iterator allows execution engines to extract Fourier 
+    features independently for each Pauli term, exploiting the linearity 
+    of the amplitude encoding.
     """
 
     @abstractmethod
-    def num_qubits(self) -> int: ...
+    def num_qubits(self) -> int:
+        """The number of qubits the observable acts upon."""
+        pass
 
     @abstractmethod
-    def terms(self) -> Iterator[PauliTerm]: ...
+    def terms(self) -> Iterator[PauliTerm]:
+        """Yields the Pauli terms comprising the observable.
 
-    # --- dense-evaluation helper (used only for ground-truth labels) ---------
+        Yields
+        ------
+        PauliTerm
+            A dataclass containing the Pauli string and its real coefficient.
+        """
+        pass
 
     def to_sparse_pauli_op(self) -> SparsePauliOp:
-        """For exact label computation ONLY. Do NOT pass this into an extractor."""
+        """Constructs the dense Qiskit operator for exact simulation.
+
+        Used exclusively for computing exact ground-truth labels during 
+        classical emulation. This aggregate operator is never passed into 
+        a quantum circuit extractor.
+
+        Returns
+        -------
+        SparsePauliOp
+            The combined sparse Pauli operator for the full observable.
+        """
         return SparsePauliOp.from_list(
-            [(t.pauli, t.coefficient) for t in self.terms()]
+            [(term.pauli, term.coefficient) for term in self.terms()]
         )

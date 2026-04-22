@@ -1,33 +1,8 @@
-"""Z2 Schwinger / 1-D lattice gauge-theory Hamiltonian.
-
-Model (interlaced matter / gauge-link layout, Qiskit little-endian):
-
-    qubit 0: matter site 0
-    qubit 1: gauge link between matter 0 and 1
-    qubit 2: matter site 1
-    qubit 3: gauge link between matter 1 and 2
-    ...
-
-    H(x, g) = m * sum_i (-1)^i Z_{m_i}                       (staggered mass, known)
-            + h * sum_i X_{l_i}                              (electric field, known)
-            + sum_{i: x_i == 1} g_i * X_{m_i} Z_{l_i} X_{m_{i+1}}   (XZX coupling, unknown)
-
-* ``x`` is a gauge-link activation mask ``list[int]`` of length
-  ``num_matter_sites - 1`` with entries in {0, 1}.  ``x_i = 1`` means link
-  i is active and has a coupling g_i > 0 to be learned.
-* ``alpha`` is the couplings vector ``g = (g_0, ..., g_{L-1})`` of shape
-  ``(num_matter_sites - 1,)``.  (Concrete implementation may choose to
-  treat only active links as unknowns; this is a detail resolved at
-  implementation time.)
-
-Placed in the d > 1 regime; routed through the separate-registers
-circuit and either Lasso-on-tensor or the kernel pipeline depending on
-the user's ``method=`` choice.
-"""
+"""1D Z_2 Lattice Gauge Theory (Staggered Schwinger Model)."""
 
 from __future__ import annotations
 
-from typing import List, Sequence, Tuple
+from typing import List, Tuple
 
 import numpy as np
 from qiskit.quantum_info import SparsePauliOp
@@ -37,27 +12,32 @@ from .base import HamiltonianModel
 
 
 class SchwingerZ2Model(HamiltonianModel):
-    """1-D Z₂ lattice-gauge Schwinger model (Kogut–Susskind, staggered).
+    """1D Z_2 staggered Schwinger model with dynamical gauge links.
 
-    Layout:
-        N matter sites + (N - 1) gauge links, interleaved
-        qubit index:  0        1        2        3        ...       2N-2
-                      matter_0 link_0   matter_1 link_1   ...       matter_{N-1}
-        num_qubits = 2 N - 1
-        num_links  = N - 1
+    The physical system is modeled via interlaced matter and gauge-link qubits.
+    The Hamiltonian features a staggered fermion mass, a background electric
+    field, and structurally variable gauge-invariant hopping terms:
 
-    Hamiltonian:
-        H(x, g) = -m Σ_i (-1)^i Z_{matter_i}              # staggered mass
-                 + ε  Σ_l X_{link_l}                       # electric field
-                 +    Σ_{l ∈ active(x)} g_l · X_{m_l} Z_{link_l} X_{m_{l+1}}
-                                                          # hopping, gauge-invariant
+    .. math::
 
-    Unknowns: g_l for each of the N - 1 gauge links, so d = N - 1.
-    Input x: boolean indicator per link — which hopping terms are active this sample.
+        H(x, g) = m \\sum_i (-1)^i Z_{m_i} + \\varepsilon \\sum_l X_{l_i} 
+                  + \\sum_{l \\in x} g_l X_{m_l} Z_{link_l} X_{m_{l+1}}
 
-    `upload_paulis[l] = XZX string on (m_l, link_l, m_{l+1})` is weight-3, so the
-    CircuitBuilder's D block must parity-fold these three qubits onto anc[0] before
-    applying the controlled V± shift into freqs[l].
+    The structural input ``x`` acts as a binary mask activating gauge links, 
+    and the unknown parameters ``g`` represent the coupling strengths of 
+    the active links (``d > 1`` regime).
+
+    Parameters
+    ----------
+    num_matter : int
+        The number of matter sites. The total qubit count will be
+        ``2 * num_matter - 1``.
+    mass : float, default=0.5
+        The staggered fermion mass :math:`m`.
+    electric_field : float, default=1.0
+        The background electric field :math:`\\varepsilon`.
+    g_range : Tuple[float, float], default=(0.5, 1.5)
+        The uniform sampling domain for the unknown gauge couplings :math:`g_l`.
     """
 
     def __init__(
@@ -65,55 +45,56 @@ class SchwingerZ2Model(HamiltonianModel):
         num_matter: int,
         mass: float = 0.5,
         electric_field: float = 1.0,
-        link_prob: float = 0.8,
         g_range: Tuple[float, float] = (0.5, 1.5),
     ) -> None:
         if num_matter < 2:
             raise ValueError(f"Schwinger requires num_matter >= 2, got {num_matter}")
+        
         self.num_matter = num_matter
         self.num_links = num_matter - 1
-        self.num_qubits = 2 * num_matter - 1
+        
+        self.num_qubits = self.num_matter + self.num_links
         self.d = self.num_links
+        
         self.mass = float(mass)
         self.electric_field = float(electric_field)
-        self.link_prob = float(link_prob)
         self.g_range = g_range
 
-    # --- qubit-index helpers -------------------------------------------------
-
     def matter_qubit(self, i: int) -> int:
-        """Qubit index of matter site i, i ∈ [0, num_matter)."""
+        """Returns the logical qubit index for matter site i."""
         return 2 * i
 
     def link_qubit(self, l: int) -> int:
-        """Qubit index of gauge link l (between matter sites l and l+1)."""
+        """Returns the logical qubit index for gauge link l."""
         return 2 * l + 1
 
-    # --- Pauli-string builders (little-endian) -------------------------------
-
-    def _single(self, op: str, q: int) -> str:
+    def _single(self, op: str, target: int) -> str:
+        """Constructs a single-qubit Pauli operator (little-endian)."""
         chars = ["I"] * self.num_qubits
-        chars[self.num_qubits - 1 - q] = op
+        chars[self.num_qubits - 1 - target] = op
         return "".join(chars)
 
     def _xzx(self, l: int) -> str:
-        """XZX on (matter_l, link_l, matter_{l+1})."""
+        """Constructs the XZX gauge-invariant hopping operator for link l."""
+        m_left = self.matter_qubit(l)
+        link = self.link_qubit(l)
+        m_right = self.matter_qubit(l + 1)
+        
         chars = ["I"] * self.num_qubits
-        chars[self.num_qubits - 1 - self.matter_qubit(l)]     = "X"
-        chars[self.num_qubits - 1 - self.link_qubit(l)]       = "Z"
-        chars[self.num_qubits - 1 - self.matter_qubit(l + 1)] = "X"
+        chars[self.num_qubits - 1 - m_left] = "X"
+        chars[self.num_qubits - 1 - link] = "Z"
+        chars[self.num_qubits - 1 - m_right] = "X"
+        
         return "".join(chars)
-
-    # --- abstract-method implementations -------------------------------------
 
     @property
     def upload_paulis(self) -> List[PauliString]:
-        # d = N - 1 weight-3 XZX uploads, one per gauge link.
         return [self._xzx(l) for l in range(self.num_links)]
 
     def hamiltonian(self, x: InputX, alpha: AlphaVector) -> SparsePauliOp:
         if len(alpha) != self.d:
             raise ValueError(f"Schwinger expects |α| == {self.d}, got {len(alpha)}")
+            
         active = list(x)
         if len(active) != self.num_links:
             raise ValueError(
@@ -122,16 +103,16 @@ class SchwingerZ2Model(HamiltonianModel):
 
         terms: List[Tuple[str, float]] = []
 
-        # Staggered mass on matter sites:  -m Σ_i (-1)^i Z_{m_i}
+        # Staggered mass on matter sites: -m Σ_i (-1)^i Z_{m_i}
         for i in range(self.num_matter):
             sign = -1.0 if (i % 2) else 1.0
             terms.append((self._single("Z", self.matter_qubit(i)), -self.mass * sign))
 
-        # Electric field on gauge links:  +ε Σ_l X_{link_l}
+        # Electric field on gauge links: +ε Σ_l X_{link_l}
         for l in range(self.num_links):
             terms.append((self._single("X", self.link_qubit(l)), self.electric_field))
 
-        # Gauge-invariant hopping:  Σ_{l active} g_l · XZX
+        # Gauge-invariant hopping: Σ_{l active} g_l * XZX
         for l in range(self.num_links):
             if active[l]:
                 terms.append((self._xzx(l), float(alpha[l])))
@@ -139,9 +120,8 @@ class SchwingerZ2Model(HamiltonianModel):
         return SparsePauliOp.from_list(terms)
 
     def sample_x(self, rng: np.random.Generator) -> InputX:
-        # Bernoulli(link_prob) per link.
-        return [bool(rng.random() < self.link_prob) for _ in range(self.num_links)]
+        # Returns a binary mask where each link has a 50% probability of being active
+        return [bool(rng.integers(0, 2)) for _ in range(self.num_links)]
 
     def sample_alpha(self, rng: np.random.Generator) -> AlphaVector:
-        lo, hi = self.g_range
-        return rng.uniform(lo, hi, size=self.d)
+        return rng.uniform(self.g_range[0], self.g_range[1], size=self.d)

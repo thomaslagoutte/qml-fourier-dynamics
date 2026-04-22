@@ -1,14 +1,25 @@
-"""Hermitian observables O = sum_h beta_h P_h for Fourier feature extraction."""
+"""Hermitian observables for Fourier feature extraction.
+
+Provides the abstract interface and concrete implementations for physical 
+observables. Observables are strictly defined as linear combinations of 
+Pauli terms to support individual feature extraction in the PAC-learning framework.
+"""
 
 from .base import Observable, PauliTerm
-from .library import ElectricFlux, LocalPauli, LocalZ, StaggeredMagnetization
+from .library import (
+    ElectricFlux,
+    LocalMagnetization,
+    LocalPauli,
+    StaggeredMagnetization,
+    TwoPointZZCorrelator,
+)
 
 __all__ = [
     "ElectricFlux",
+    "LocalMagnetization",
     "LocalPauli",
-    "LocalZ",
-    "TwoPointZZCorrelator",
     "Observable",
     "PauliTerm",
     "StaggeredMagnetization",
+    "TwoPointZZCorrelator",
 ]
