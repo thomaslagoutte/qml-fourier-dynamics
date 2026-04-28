@@ -1,10 +1,21 @@
-"""Core type aliases used throughout the package for static analysis."""
+"""Shared type aliases used across the package."""
 
 from __future__ import annotations
 
-from typing import Any, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import numpy as np
+
+# -----------------------------------------------------------------------------
+# Extraction Modes
+# -----------------------------------------------------------------------------
+
+ExtractorMode: TypeAlias = Literal["spatial", "qetu"]
+"""The quantum algorithmic strategy for Fourier feature extraction.
+
+* `"spatial"`: Uses multi-register phase kickback. Complexity scales as (4r+1)^d.
+* `"qetu"`: Uses Quantum Eigenvalue Transformation of Unitaries. Complexity scales as O(r*d).
+"""
 
 # -----------------------------------------------------------------------------
 # Quantum State & Operators

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
+from tqdm.auto import tqdm
+
 import numpy as np
 from scipy.linalg import expm
 
@@ -133,19 +135,23 @@ class Experiment:
             )
 
     def compute_exact_labels(
-        self, X_list: Sequence[InputX], alpha_star: AlphaVector, tau: float
+        self, X_list: Sequence[InputX], alpha_star: AlphaVector, tau: float, show_progress: bool = False
     ) -> LabelVector:
         """Computes exact continuous dynamics via dense Hamiltonian matrices."""
         O = self.observable.to_sparse_pauli_op().to_matrix()
         labels = np.empty(len(X_list), dtype=np.float64)
-        for i, x in enumerate(X_list):
+        
+        # Wrap the loop in tqdm if show_progress is True
+        iterator = tqdm(X_list, desc="Exact Physics Labels", disable=not show_progress, leave=False)
+        
+        for i, x in enumerate(iterator):
             U = self.model.exact_unitary(x, alpha_star, tau)
             psi = U[:, 0]
             labels[i] = np.real(np.conj(psi) @ O @ psi)
         return labels
 
     def compute_trotter_labels(
-        self, X_list: Sequence[InputX], alpha_star: AlphaVector, tau: float, r_steps: int
+        self, X_list: Sequence[InputX], alpha_star: AlphaVector, tau: float, r_steps: int, show_progress: bool = False
     ) -> LabelVector:
         """Computes discretized dynamics matching the circuit extraction order."""
         O = self.observable.to_sparse_pauli_op().to_matrix()
@@ -155,7 +161,9 @@ class Experiment:
         _h_cache = {}
         zero_alpha = np.zeros(self.model.d, dtype=np.float64)
 
-        for i, x in enumerate(X_list):
+        iterator = tqdm(X_list, desc="Trotter Dynamics Labels", disable=not show_progress, leave=False)
+
+        for i, x in enumerate(iterator):
             x_key = tuple(x)
             if x_key not in _h_cache:
                 H_full = self.model.hamiltonian(x, alpha_star).to_matrix()
@@ -182,30 +190,44 @@ class Experiment:
             
         return labels
 
-    def run(self, num_train: int, num_test: int) -> ExperimentResult:
+    def run(self, num_train: int, num_test: int, show_progress: bool = False) -> ExperimentResult:
         """Executes the complete PAC-learning pipeline."""
+        
+        # 1. Data Generation
+        if show_progress: print("Step 1/4: Sampling Topologies...")
         alpha_star = self.model.sample_alpha(self._sampling_rng)
         X_train = [self.model.sample_x(self._sampling_rng) for _ in range(num_train)]
         X_test = [self.model.sample_x(self._sampling_rng) for _ in range(num_test)]
 
-        y_train = self.compute_trotter_labels(X_train, alpha_star, self.tau, self.r_steps)
-        y_true_exact = self.compute_exact_labels(X_test, alpha_star, self.tau)
-        y_true_trotter = self.compute_trotter_labels(X_test, alpha_star, self.tau, self.r_steps)
+        # 2. Classical Label Computation
+        if show_progress: print("Step 2/4: Computing Target Labels...")
+        y_train = self.compute_trotter_labels(X_train, alpha_star, self.tau, self.r_steps, show_progress)
+        y_true_exact = self.compute_exact_labels(X_test, alpha_star, self.tau, show_progress)
+        y_true_trotter = self.compute_trotter_labels(X_test, alpha_star, self.tau, self.r_steps, show_progress)
 
+        # 3. Quantum Execution Pipeline
+        if show_progress: print(f"Step 3/4: Quantum Hardware Execution ({self.method} mode)...")
         if self.method == "lasso":
+            # Note: For granular tracking here, you could also wrap the loops inside engine.extract in engines.py
             train_data = self.engine.extract(X_train, self.tau, self.r_steps, self.observable)
             test_data = self.engine.extract(X_test, self.tau, self.r_steps, self.observable)
+            
+            if show_progress: print("Step 4/4: Fitting Classical ML Model...")
             self.learner.fit(train_data, y_train)
             y_pred = self.learner.predict(test_data)
             
         elif self.method == "kernel":
             K_train = self.engine.compute_gram(X_train, None, self.tau, self.r_steps, self.observable)
             K_test = self.engine.compute_gram(X_test, X_train, self.tau, self.r_steps, self.observable)
+            
+            if show_progress: print("Step 4/4: Fitting Classical ML Model...")
             self.learner.fit(K_train, y_train)
             y_pred = self.learner.predict(K_test)
 
         mse_exact = float(np.mean((y_pred - y_true_exact) ** 2))
         mse_trotter = float(np.mean((y_pred - y_true_trotter) ** 2))
+        
+        if show_progress: print("Pipeline Complete!")
 
         return ExperimentResult(
             y_true_exact=y_true_exact,

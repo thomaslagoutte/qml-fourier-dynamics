@@ -6,30 +6,58 @@ point in the ``d > 1`` regime, this builder evaluates the Gram matrix entry:
 
     K(x_1, x_2) = Re ⟨ψ(x_1) | ψ(x_2)⟩
 
-This is evaluated directly via a single Hadamard-test circuit. Here,
-``|ψ(x)⟩ = A(U, P) |0⟩`` represents the prepared state. The inner product
-evaluates across the entire basis (data, ancilla, and frequency registers),
-yielding a scalar kernel entry per pair.
+via a single Hadamard-test circuit per pair. Here,
+``|ψ(x)⟩ = A(U, P) |0⟩`` is the prepared state; the HT measurement on
+``ht_control`` projects the real part of the full inner product across
+the (data, ancilla, frequency) basis.
+
+Inline controlled-gate assembly
+-------------------------------
+Earlier revisions of this builder wrapped the inner ``A(U, P)_{x_1} ∘
+A(U, P)_{x_2}`` block in ``inner.to_gate().control(1, annotated=True)``.
+Even with ``annotated=True``, the controlled gate is eventually
+synthesised by Qiskit's ``HighLevelSynthesis`` pass via the default
+``ControlModifier`` plugin, which falls back to Quantum-Shannon
+decomposition for any dense unitary.  For a 16-17 qubit inner block
+this dominated runtime — synthesis alone took tens of minutes per pair
+on n=3, r=2.
+
+The current implementation builds c-(A_x1 ∘ A_x2) **gate-by-gate**
+using the singly- and doubly-controlled primitives in
+:mod:`._controlled_ops`:
+
+  * c-RZZ via ``CX → CRZ → CX``
+  * c-RXX / c-RYY via unconditional basis change + c-RZZ
+  * c-CX (parity cascade onto ``anc``) via Toffoli (``CCX``)
+  * c-cV±  via MCX cascade with the additional ``ht`` control
+  * c-PauliGate(P) via ``cx`` / ``cy`` / ``cz`` per non-I character
+
+Mathematically identical to ``.control(1)``; computationally, it
+synthesises in the standard CX / CR* / CCX / MCX basis without any
+QSD fallback.  See :mod:`._controlled_ops` for the algebra justifying
+the unconditional basis-change "sandwich trick".
 
 Circuit Construction
 --------------------
-For a pair of inputs ``(x_1, x_2)`` and a single Pauli observable ``P``:
+For a pair of inputs ``(x_1, x_2)`` and Pauli observables ``P_h``,
+``P_{h'}`` (use ``pauli2 is None`` for the single-term case):
 
-1. Inner Unitary Construction:
-   The operator ``A(U, P)`` is Hermitian. Consequently, the forward sequence
-   is equivalent to the standard Hadamard-test sequence:
-       U_inner = A(U, P)_{x_1} ∘ A(U, P)_{x_2}
+1. Outer registers: ``ht_control[1] | data[n] | anc[1] | freq_0[n_s] |
+   ... | freq_{d-1}[n_s] | creg[1]``.
 
-2. Controlled Execution:
-   ``U_inner`` is promoted to a single-qubit-controlled gate using annotated
-   synthesis to defer eager Quantum-Shannon decomposition.
+2. Apply ``H(ht_control)``.
 
-3. Hadamard Test:
-   The standard sequence is applied to the control qubit:
-       H → controlled-U_inner → H → Measure
+3. Inline ``c-A(U, P_h)_{x_1}``: c-A(U) forward → c-PauliGate(P_h) →
+   c-A(U)† adjoint, all on the outer circuit, every elementary gate
+   replaced by its controlled twin.
 
-4. Estimator:
-   K(x_1, x_2) ≈ 2 * P(ht=0) - 1
+4. Inline ``c-A(U, P_{h'})_{x_2}``: same, with ``x_2`` and ``P_{h'}``.
+   Because ``A(U, P)`` is Hermitian, this is exactly the textbook
+   Hadamard-test sequence ``A(x_2)† · A(x_1)``.
+
+5. Apply ``H(ht_control)`` and ``measure(ht_control[0], creg[0])``.
+
+6. Estimator: ``K(x_1, x_2) ≈ 2 · P(ht = 0) − 1``.
 """
 
 from __future__ import annotations
@@ -37,18 +65,18 @@ from __future__ import annotations
 from typing import Optional
 
 from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister
-from qiskit.circuit.library import PauliGate
 
 from .._types import InputX, PauliString
+from ._controlled_ops import append_ctrl_pauli_string
 from .separate_registers import SeparateRegistersBuilder
 
 
 class KernelOverlapBuilder(SeparateRegistersBuilder):
     """Builds the quantum-overlap-kernel circuit (Figure 8 of Barthe et al. 2025).
 
-    Inherits from :class:`SeparateRegistersBuilder` to utilize the inhomogeneous
-    forward/adjoint primitives and the shared gate cache. Functions correctly
-    for both ``d = 1`` and ``d > 1`` regimes.
+    Inherits from :class:`SeparateRegistersBuilder` to reuse the
+    inhomogeneous A(U) forward/adjoint primitives and the shared gate
+    cache.  Functions correctly for both ``d = 1`` and ``d > 1`` regimes.
 
     Parameters
     ----------
@@ -76,26 +104,29 @@ class KernelOverlapBuilder(SeparateRegistersBuilder):
         ----------
         num_qubits : int
             Number of data qubits in the system.
-        x1 : InputX
-            The first input graph or structural sample.
-        x2 : InputX
-            The second input graph or structural sample.
+        x1, x2 : InputX
+            The two input samples whose overlap is being estimated.
         tau : float
             Total evolution time for the dynamics.
         r_steps : int
-            Number of Trotter steps for the discretized evolution.
+            Number of Trotter steps.
         pauli1 : PauliString
-            The Pauli observable term applied to the ``x1`` sequence.
+            Pauli observable term ``P_h`` applied to the ``x1`` sequence.
         pauli2 : PauliString, optional
-            The Pauli observable term applied to the ``x2`` sequence. Defaults
-            to ``pauli1`` to compute the standard single-term overlap. Cross-Pauli
-            overlaps require explicit specification.
+            Pauli observable term ``P_{h'}`` applied to the ``x2``
+            sequence.  Defaults to ``pauli1`` for the standard
+            single-term overlap.  Pass a distinct Pauli to build the
+            cross-term ``K_{h, h'}`` circuit needed by composite
+            observables (see :class:`HardwareKernelEvaluator`).
 
         Returns
         -------
         QuantumCircuit
-            The assembled Hadamard-test circuit containing the control qubit,
-            data register, ancilla, frequency registers, and classical register.
+            Self-contained circuit ready for V2 Sampler submission.
+            Only ``ht_control[0]`` is measured (into ``creg[0]``); the
+            data / anc / freq registers are unmeasured because the HT
+            projects the per-overlap statistic onto ``ht_control``'s
+            ``⟨Z⟩`` directly.
         """
         if pauli2 is None:
             pauli2 = pauli1
@@ -103,61 +134,33 @@ class KernelOverlapBuilder(SeparateRegistersBuilder):
         n_s = self.freq_register_size(num_qubits, r_steps)
         d = self.model.d
 
-        # 1. Construct the inner composite unitary: A(U, P)_x1 ∘ A(U, P)_x2
-        inner_data = QuantumRegister(num_qubits, "data")
-        inner_anc = QuantumRegister(1, "anc")
-        inner_freqs = [QuantumRegister(n_s, f"freq_{q}") for q in range(d)]
-        
-        inner = QuantumCircuit(
-            inner_data, inner_anc, *inner_freqs, name="K_overlap"
-        )
-
-        # Apply A(U, P)_x1
-        self._append_au_forward(
-            inner, inner_data, inner_anc, inner_freqs, x1, tau, r_steps
-        )
-        inner.append(PauliGate(pauli1), list(inner_data))
-        self._append_au_adjoint(
-            inner, inner_data, inner_anc, inner_freqs, x1, tau, r_steps
-        )
-
-        # Apply A(U, P)_x2
-        self._append_au_forward(
-            inner, inner_data, inner_anc, inner_freqs, x2, tau, r_steps
-        )
-        inner.append(PauliGate(pauli2), list(inner_data))
-        self._append_au_adjoint(
-            inner, inner_data, inner_anc, inner_freqs, x2, tau, r_steps
-        )
-
-        # 2. Promote to a single annotated controlled-composite gate
-        # Annotated synthesis defers full matrix decomposition, preventing
-        # memory exhaustion during transpilation of dense unitary blocks.
-        controlled_overlap = inner.to_gate(label="K_overlap").control(
-            1, annotated=True
-        )
-
-        # 3. Construct the outer Hadamard-test circuit
+        # ---- Outer Hadamard-test circuit registers --------------------
         ht_control = QuantumRegister(1, "ht_control")
-        data = QuantumRegister(num_qubits, "data")
-        anc = QuantumRegister(1, "anc")
-        freqs = [QuantumRegister(n_s, f"freq_{q}") for q in range(d)]
-        creg = ClassicalRegister(1, "creg")
-        
-        qc = QuantumCircuit(ht_control, data, anc, *freqs, creg)
+        data       = QuantumRegister(num_qubits, "data")
+        anc        = QuantumRegister(1, "anc")
+        freqs      = [QuantumRegister(n_s, f"freq_{q}") for q in range(d)]
+        creg       = ClassicalRegister(1, "creg")
+        qc         = QuantumCircuit(ht_control, data, anc, *freqs, creg)
+        ht         = ht_control[0]
 
-        # Flatten frequency registers for the gate append
-        freq_qubits_flat: list = []
-        for fr in freqs:
-            freq_qubits_flat.extend(list(fr))
+        # ---- Hadamard-test envelope -----------------------------------
+        qc.h(ht)
 
-        # 4. Apply the Hadamard-test sequence
-        qc.h(ht_control[0])
-        qc.append(
-            controlled_overlap,
-            [ht_control[0], *data, *anc, *freq_qubits_flat],
-        )
-        qc.h(ht_control[0])
-        qc.measure(ht_control[0], creg[0])
+        # Inline c-A(U, P_h)_{x_1}: forward → c-P_h → adjoint, every
+        # elementary gate replaced by its controlled twin.  No
+        # ``to_gate().control()`` ⇒ no Quantum-Shannon synthesis.
+        self._append_ctrl_au_forward(qc, ht, data, anc, freqs, x1, tau, r_steps)
+        append_ctrl_pauli_string(qc, ht, list(data), pauli1)
+        self._append_ctrl_au_adjoint(qc, ht, data, anc, freqs, x1, tau, r_steps)
+
+        # Inline c-A(U, P_{h'})_{x_2}: since A(U, P) is Hermitian, this
+        # second forward block realises the textbook Hadamard-test
+        # sequence A(x_2)† · A(x_1) on the ht=1 branch.
+        self._append_ctrl_au_forward(qc, ht, data, anc, freqs, x2, tau, r_steps)
+        append_ctrl_pauli_string(qc, ht, list(data), pauli2)
+        self._append_ctrl_au_adjoint(qc, ht, data, anc, freqs, x2, tau, r_steps)
+
+        qc.h(ht)
+        qc.measure(ht, creg[0])
 
         return qc

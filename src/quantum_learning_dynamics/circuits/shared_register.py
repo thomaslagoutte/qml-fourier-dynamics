@@ -38,6 +38,14 @@ from typing import List, Optional, Sequence, Tuple
 from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister
 from qiskit.circuit.library import PauliGate
 
+from ._controlled_ops import (
+    append_ctrl_pauli_string,
+    append_ctrl_rzz,
+    append_dctrl_cVm,
+    append_dctrl_cVm_dag,
+    append_dctrl_cVp,
+    append_dctrl_cVp_dag,
+)
 from .base import CircuitBuilder, ExecutionMode, TargetFreq
 
 
@@ -109,6 +117,47 @@ class SharedRegisterBuilder(CircuitBuilder):
             qc.h(data[q])
 
     # ------------------------------------------------------------------
+    # Inline-controlled D·G·D — the HT-controlled twin of the above.
+    # ------------------------------------------------------------------
+    #
+    # Mathematical contract: ``_ctrl_dgd_*`` is the ``ht``-controlled
+    # version of ``_dgd_*``.  We exploit the identity
+    #
+    #     c-(Φ⁻¹ · M · Φ)   =   Φ⁻¹ · c-M · Φ      (Φ unconditional)
+    #
+    # to leave the outer ``H(data[q])`` basis changes unconditional and
+    # only control the inner cV± gates (where the parity control is
+    # ``data[q]``, not ``anc``).  This avoids paying for a c-H per
+    # qubit per Trotter step, which would otherwise need a CRY-CX-CRY
+    # decomposition and double the gate count.
+
+    def _ctrl_dgd_forward(self, qc, ht, data, freq) -> None:
+        """``ht``-controlled twin of :meth:`_dgd_forward`.
+
+        Per qubit ``q`` the conditional block is
+        ``c-(H · cV+ · cV- · H)`` with the inner cV± gates promoted to
+        their doubly-controlled (ht, data[q]) variants and the outer
+        H gates left unconditional.
+        """
+        for q in range(len(data)):
+            qc.h(data[q])                                       # unconditional Φ
+            append_dctrl_cVp(qc, ht, data[q], freq)             # c-cV+
+            append_dctrl_cVm(qc, ht, data[q], freq)             # c-cV-
+            qc.h(data[q])                                       # unconditional Φ⁻¹
+
+    def _ctrl_dgd_adjoint(self, qc, ht, data, freq) -> None:
+        """``ht``-controlled twin of :meth:`_dgd_adjoint`.
+
+        Reverses qubit order, swaps :math:`cV^{\\pm}` order, and uses
+        the doubly-controlled (cV±)† variants on the inner gates.
+        """
+        for q in reversed(range(len(data))):
+            qc.h(data[q])
+            append_dctrl_cVm_dag(qc, ht, data[q], freq)
+            append_dctrl_cVp_dag(qc, ht, data[q], freq)
+            qc.h(data[q])
+
+    # ------------------------------------------------------------------
     # Forward / adjoint Trotter evolutions
     # ------------------------------------------------------------------
 
@@ -144,6 +193,48 @@ class SharedRegisterBuilder(CircuitBuilder):
                 self._dgd_adjoint(qc, data, freq, cache)
                 for (i, j) in rev_edges:
                     qc.rzz(-1.0 * dt, data[i], data[j])
+
+    # ------------------------------------------------------------------
+    # Inline-controlled Trotter evolutions (used by hardware mode).
+    # ------------------------------------------------------------------
+
+    def _append_ctrl_au_forward(self, qc, ht, data, freq, edges, tau, r_steps) -> None:
+        """Inline ``ht``-controlled :math:`\\mathcal{A}(U)` (forward).
+
+        Direct twin of :meth:`_append_au_forward`: every elementary gate
+        is replaced by its singly- or doubly-controlled inline form.
+        Mathematically identical to wrapping the full block in
+        ``.control(1)``, but synthesised entirely in the
+        ``CX / CRZ / CCX / MCX`` basis — no Quantum-Shannon decomposition.
+        """
+        dt = tau / r_steps
+        for _ in range(r_steps):
+            if self.trotter_order == 1:
+                for (i, j) in edges:
+                    append_ctrl_rzz(qc, ht, data[i], data[j], +2.0 * dt)
+                self._ctrl_dgd_forward(qc, ht, data, freq)
+            elif self.trotter_order == 2:
+                for (i, j) in edges:
+                    append_ctrl_rzz(qc, ht, data[i], data[j], +1.0 * dt)
+                self._ctrl_dgd_forward(qc, ht, data, freq)
+                for (i, j) in edges:
+                    append_ctrl_rzz(qc, ht, data[i], data[j], +1.0 * dt)
+
+    def _append_ctrl_au_adjoint(self, qc, ht, data, freq, edges, tau, r_steps) -> None:
+        """Inline ``ht``-controlled :math:`\\mathcal{A}(U)^{\\dagger}` (adjoint)."""
+        dt = tau / r_steps
+        rev_edges = list(reversed(list(edges)))
+        for _ in range(r_steps):
+            if self.trotter_order == 1:
+                self._ctrl_dgd_adjoint(qc, ht, data, freq)
+                for (i, j) in rev_edges:
+                    append_ctrl_rzz(qc, ht, data[i], data[j], -2.0 * dt)
+            elif self.trotter_order == 2:
+                for (i, j) in rev_edges:
+                    append_ctrl_rzz(qc, ht, data[i], data[j], -1.0 * dt)
+                self._ctrl_dgd_adjoint(qc, ht, data, freq)
+                for (i, j) in rev_edges:
+                    append_ctrl_rzz(qc, ht, data[i], data[j], -1.0 * dt)
 
     # ------------------------------------------------------------------
     # Public circuit factories
@@ -201,20 +292,22 @@ class SharedRegisterBuilder(CircuitBuilder):
         Circuit structure (``"hardware"`` mode)
         ---------------------------------------
         Implements the per-frequency Hadamard test of Corollary 2 /
-        Figure 7:
+        Figure 7 via **inline controlled-gate assembly**:
 
-        1. An *inner* circuit holds :math:`\\mathcal{A}(U, P)` on
-           ``(data, anc, freq)``; the ``anc`` register is the parity-fold
-           target and therefore cannot double as the HT control.
-        2. ``controlled_A = inner.to_gate().control(1, annotated=True)``
-           promotes the inner unitary to a single controlled gate. The
-           ``annotated=True`` flag defers synthesis so Qiskit does not
-           eagerly decompose the dense :math:`\\mathcal{A}(U, P)` unitary.
-        3. The outer HT circuit is
-           ``H → c-A → freq-selector CX ladder → H → measure(ht_control)``.
-           The CX ladder shifts the interference slot from
-           :math:`f = 0` to :math:`f = l` so the final H projects
-           :math:`\\mathrm{Re}(b_l)`.
+        1. The HT-controlled :math:`\\mathcal{A}(U, P)` is built
+           **gate-by-gate** on the outer circuit using the controlled
+           primitives in :mod:`._controlled_ops` — c-RZZ via 2 CX +
+           1 CRZ, doubly-controlled cV± via MCX cascades, and
+           c-PauliGate(P) as a sequence of ``cx``/``cy``/``cz``.
+           Mathematically identical to wrapping the inner block in
+           ``.control(1)``, but **never invokes HighLevelSynthesis'
+           controlled-unitary fallback** (Quantum-Shannon decomposition),
+           which was the dominant runtime bottleneck for n ≥ 3.
+        2. The HT skeleton is therefore
+           ``H → c-A(U,P) (inline) → freq-selector CX ladder → H →
+           measure(ht_control)``.  The CX ladder shifts the interference
+           slot from :math:`f = 0` to :math:`f = l` so the final H
+           projects :math:`\\mathrm{Re}(b_l)`.
 
         Parameters
         ----------
@@ -260,32 +353,30 @@ class SharedRegisterBuilder(CircuitBuilder):
             return qc, [freq]
 
         # ---- "hardware" / "hardware_base" shared prefix ----------------
-        # Build A(U, P) on an inner circuit and promote it to a single
-        # annotated controlled gate. The expensive synthesis step is
-        # ``inner.to_gate().control(1, annotated=True)``; executing it
-        # once per (x, tau, r_steps, pauli) — and copying the resulting
-        # prefix for each target frequency — is the purpose of the
-        # ``"hardware_base"`` mode.
+        # Inline-controlled assembly: build c-A(U, P) gate-by-gate using
+        # the controlled-rotation and doubly-controlled-cV± primitives
+        # in :mod:`._controlled_ops`.  Mathematically identical to
+        # ``inner.to_gate().control(1, annotated=True)`` but
+        # **synthesised entirely in the CX / CRZ / CCX / MCX basis**
+        # without ever invoking ``HighLevelSynthesis``'s controlled-
+        # unitary fallback (Quantum-Shannon decomposition), which was
+        # the dominant bottleneck for n ≥ 3 hardware-mode runs.
+        #
+        # The ``anc`` register is allocated for layout consistency with
+        # build_au but is unused by the d=1 D·G·D block — only ``data``
+        # qubits act as parity controls of cV±.
 
-        # (1) Inner A(U, P) circuit on (data, anc, freq).
-        inner_data = QuantumRegister(num_qubits, "data")
-        inner_anc  = QuantumRegister(1, "anc")
-        inner_freq = QuantumRegister(n_s, "freq")
-        inner = QuantumCircuit(inner_data, inner_anc, inner_freq, name="A_UP")
-        self._append_au_forward(inner, inner_data, inner_freq, edges, tau, r_steps)
-        inner.append(PauliGate(pauli), list(inner_data))
-        self._append_au_adjoint(inner, inner_data, inner_freq, edges, tau, r_steps)
-
-        # (2) Lazy controlled-A (annotated synthesis; see docstring).
-        controlled_A = inner.to_gate(label="A_UP").control(1, annotated=True)
-
-        # (3) Outer HT skeleton shared between both hardware modes.
         ht_control = QuantumRegister(1, "ht_control")
         creg = ClassicalRegister(1, "creg")
         qc = QuantumCircuit(ht_control, data, anc, freq, creg)
+        ht = ht_control[0]
 
-        qc.h(ht_control[0])
-        qc.append(controlled_A, [ht_control[0], *data, *anc, *freq])
+        qc.h(ht)
+        # c-A(U) (forward) ─ c-PauliGate(P) ─ c-A(U)† (adjoint)
+        # — the entire HT-controlled inner block, inlined.
+        self._append_ctrl_au_forward(qc, ht, data, freq, edges, tau, r_steps)
+        append_ctrl_pauli_string(qc, ht, list(data), pauli)
+        self._append_ctrl_au_adjoint(qc, ht, data, freq, edges, tau, r_steps)
 
         if execution_mode == "hardware_base":
             # Return prefix only; caller appends the cheap per-frequency tail.

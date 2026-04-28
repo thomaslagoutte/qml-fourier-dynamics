@@ -222,10 +222,11 @@ class FeatureEngine(_EngineBase):
 
         b_flat = np.zeros(len(pubs), dtype=np.float64)
         for i in range(len(pubs)):
-            counts = result[i].data.creg.get_counts()
-            n0 = int(counts.get("0", 0))
-            n1 = int(counts.get("1", 0))
-            b_flat[i] = (n0 - n1) / max(n0 + n1, 1)
+            # Optimized V2 Sampler array extraction (bypasses slow dict construction)
+            bit_array = result[i].data.creg.array
+            n1 = int(np.sum(bit_array))
+            n0 = self.shots - n1
+            b_flat[i] = (n0 - n1) / self.shots
 
         return b_flat
 
@@ -433,10 +434,11 @@ class KernelEngine(_EngineBase):
         result = job.result()
 
         for k, (i, j, h_idx, hp_idx) in enumerate(job_map):
-            counts = result[k].data.creg.get_counts()
-            n0 = int(counts.get("0", 0))
-            n1 = int(counts.get("1", 0))
-            noisy_overlap = (n0 - n1) / max(n0 + n1, 1)
+            # Fast bit array summation
+            bit_array = result[k].data.creg.array
+            n1 = int(np.sum(bit_array))
+            n0 = self.shots - n1
+            noisy_overlap = (n0 - n1) / self.shots
 
             c_h = paulis[h_idx][1]
             c_hp = paulis[hp_idx][1]

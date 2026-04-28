@@ -42,6 +42,16 @@ import numpy as np
 from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister
 from qiskit.circuit.library import PauliGate
 
+from ._controlled_ops import (
+    append_ctrl_pauli_string,
+    append_ctrl_rxx,
+    append_ctrl_ryy,
+    append_ctrl_rzz,
+    append_dctrl_cVm,
+    append_dctrl_cVm_dag,
+    append_dctrl_cVp,
+    append_dctrl_cVp_dag,
+)
 from .base import CircuitBuilder, ExecutionMode, TargetFreq
 
 
@@ -167,6 +177,101 @@ class SeparateRegistersBuilder(CircuitBuilder):
                     qc.s(data[i])
 
     # ------------------------------------------------------------------
+    # Inline-controlled D·G·D — HT-controlled twin of the above.
+    # ------------------------------------------------------------------
+    #
+    # Mathematical contract (cf. ``shared_register._ctrl_dgd_*``):
+    #
+    #     c-(Φ⁻¹ · M · Φ)  =  Φ⁻¹ · c-M · Φ      (Φ unconditional)
+    #
+    # The basis-change H / S† / S on the data qubits stay unconditional;
+    # the inner (CX(q, anc) · cV± · CX(q, anc)) block gets every gate
+    # promoted to its singly- or doubly-controlled form on ``ht``:
+    #
+    #     CX(q, anc)            →  CCX(ht, q, anc)
+    #     cVp(anc, freqs[k])    →  doubly-controlled (ht, anc) cV+
+    #     cVm(anc, freqs[k])    →  doubly-controlled (ht, anc) cV-
+    #
+    # No QSD fallback is invoked.
+
+    def _ctrl_dgd_forward(self, qc, ht, data, anc, freqs, x) -> None:
+        """``ht``-controlled twin of :meth:`_dgd_forward`."""
+        ones_alpha = np.ones(self.model.d)
+        zero_alpha = np.zeros(self.model.d)
+        H_up = self.model.hamiltonian(x, ones_alpha) - self.model.hamiltonian(x, zero_alpha)
+        active_paulis = {p for p, c in H_up.to_list() if abs(c) > 1e-12}
+
+        for k, pauli_str in enumerate(self.model.upload_paulis):
+            if pauli_str not in active_paulis:
+                continue
+
+            # Unconditional basis change (Φ).
+            active = []
+            for i, p in enumerate(reversed(pauli_str)):
+                if p == 'X':
+                    qc.h(data[i])
+                    active.append(data[i])
+                elif p == 'Y':
+                    qc.sdg(data[i])
+                    qc.h(data[i])
+                    active.append(data[i])
+                elif p == 'Z':
+                    active.append(data[i])
+
+            # Controlled inner block (M).  CX(q, anc) → CCX(ht, q, anc).
+            for q in active:
+                qc.ccx(ht, q, anc[0])
+            append_dctrl_cVp(qc, ht, anc[0], freqs[k])
+            append_dctrl_cVm(qc, ht, anc[0], freqs[k])
+            for q in reversed(active):
+                qc.ccx(ht, q, anc[0])
+
+            # Unconditional inverse basis change (Φ⁻¹).
+            for i, p in enumerate(reversed(pauli_str)):
+                if p == 'X':
+                    qc.h(data[i])
+                elif p == 'Y':
+                    qc.h(data[i])
+                    qc.s(data[i])
+
+    def _ctrl_dgd_adjoint(self, qc, ht, data, anc, freqs, x) -> None:
+        """``ht``-controlled twin of :meth:`_dgd_adjoint`."""
+        ones_alpha = np.ones(self.model.d)
+        zero_alpha = np.zeros(self.model.d)
+        H_up = self.model.hamiltonian(x, ones_alpha) - self.model.hamiltonian(x, zero_alpha)
+        active_paulis = {p for p, c in H_up.to_list() if abs(c) > 1e-12}
+
+        for k, pauli_str in reversed(list(enumerate(self.model.upload_paulis))):
+            if pauli_str not in active_paulis:
+                continue
+
+            active = []
+            for i, p in enumerate(reversed(pauli_str)):
+                if p == 'X':
+                    qc.h(data[i])
+                    active.append(data[i])
+                elif p == 'Y':
+                    qc.sdg(data[i])
+                    qc.h(data[i])
+                    active.append(data[i])
+                elif p == 'Z':
+                    active.append(data[i])
+
+            for q in active:
+                qc.ccx(ht, q, anc[0])
+            append_dctrl_cVm_dag(qc, ht, anc[0], freqs[k])
+            append_dctrl_cVp_dag(qc, ht, anc[0], freqs[k])
+            for q in reversed(active):
+                qc.ccx(ht, q, anc[0])
+
+            for i, p in enumerate(reversed(pauli_str)):
+                if p == 'X':
+                    qc.h(data[i])
+                elif p == 'Y':
+                    qc.h(data[i])
+                    qc.s(data[i])
+
+    # ------------------------------------------------------------------
     # Fixed (α-independent) Hamiltonian evolution
     # ------------------------------------------------------------------
 
@@ -239,6 +344,85 @@ class SeparateRegistersBuilder(CircuitBuilder):
                 self._append_fixed_hamiltonian(qc, data, x, dt / 2.0, -1.0)
 
     # ------------------------------------------------------------------
+    # Inline-controlled Trotter evolutions (used by hardware mode).
+    # ------------------------------------------------------------------
+
+    def _append_ctrl_fixed_hamiltonian(self, qc, ht, data, x, dt, sign=1.0) -> None:
+        """``ht``-controlled twin of :meth:`_append_fixed_hamiltonian`.
+
+        Maps each native rotation in :math:`H_{\\text{fixed}}(x)` to its
+        singly-controlled inline form:
+
+        +-------------------+----------------------------------------+
+        | rz / rx / ry      | ``crz / crx / cry``  (native)          |
+        +-------------------+----------------------------------------+
+        | rzz               | :func:`append_ctrl_rzz` (CX·CRZ·CX)    |
+        +-------------------+----------------------------------------+
+        | rxx               | :func:`append_ctrl_rxx` (H·c-RZZ·H)    |
+        +-------------------+----------------------------------------+
+        | ryy               | :func:`append_ctrl_ryy`                |
+        +-------------------+----------------------------------------+
+        """
+        zero_alpha = np.zeros(self.model.d)
+        H_fixed = self.model.hamiltonian(x, zero_alpha)
+
+        for pauli_str, coeff in H_fixed.to_list():
+            if abs(coeff) < 1e-12:
+                continue
+            theta = 2.0 * sign * dt * np.real(coeff)
+
+            p_list = list(reversed(pauli_str))
+            active_q = [(i, p) for i, p in enumerate(p_list) if p != 'I']
+
+            if len(active_q) == 1:
+                q0, p0 = active_q[0]
+                if p0 == 'Z':
+                    qc.crz(theta, ht, data[q0])
+                elif p0 == 'X':
+                    qc.crx(theta, ht, data[q0])
+                elif p0 == 'Y':
+                    qc.cry(theta, ht, data[q0])
+            elif len(active_q) == 2:
+                q0, p0 = active_q[0]
+                q1, p1 = active_q[1]
+                if p0 == 'Z' and p1 == 'Z':
+                    append_ctrl_rzz(qc, ht, data[q0], data[q1], theta)
+                elif p0 == 'X' and p1 == 'X':
+                    append_ctrl_rxx(qc, ht, data[q0], data[q1], theta)
+                elif p0 == 'Y' and p1 == 'Y':
+                    append_ctrl_ryy(qc, ht, data[q0], data[q1], theta)
+
+    def _append_ctrl_au_forward(self, qc, ht, data, anc, freqs, x, tau, r_steps) -> None:
+        """Inline ``ht``-controlled :math:`\\mathcal{A}(U)` (forward).
+
+        Direct twin of :meth:`_append_au_forward`: every elementary gate
+        becomes its inline controlled form.  Synthesises into the
+        ``CX / CRX / CRY / CRZ / CCX / MCX`` basis without invoking
+        Quantum-Shannon decomposition.
+        """
+        dt = tau / r_steps
+        for _ in range(r_steps):
+            if self.trotter_order == 1:
+                self._append_ctrl_fixed_hamiltonian(qc, ht, data, x, dt, 1.0)
+                self._ctrl_dgd_forward(qc, ht, data, anc, freqs, x)
+            elif self.trotter_order == 2:
+                self._append_ctrl_fixed_hamiltonian(qc, ht, data, x, dt / 2.0, 1.0)
+                self._ctrl_dgd_forward(qc, ht, data, anc, freqs, x)
+                self._append_ctrl_fixed_hamiltonian(qc, ht, data, x, dt / 2.0, 1.0)
+
+    def _append_ctrl_au_adjoint(self, qc, ht, data, anc, freqs, x, tau, r_steps) -> None:
+        """Inline ``ht``-controlled :math:`\\mathcal{A}(U)^{\\dagger}` (adjoint)."""
+        dt = tau / r_steps
+        for _ in range(r_steps):
+            if self.trotter_order == 1:
+                self._ctrl_dgd_adjoint(qc, ht, data, anc, freqs, x)
+                self._append_ctrl_fixed_hamiltonian(qc, ht, data, x, dt, -1.0)
+            elif self.trotter_order == 2:
+                self._append_ctrl_fixed_hamiltonian(qc, ht, data, x, dt / 2.0, -1.0)
+                self._ctrl_dgd_adjoint(qc, ht, data, anc, freqs, x)
+                self._append_ctrl_fixed_hamiltonian(qc, ht, data, x, dt / 2.0, -1.0)
+
+    # ------------------------------------------------------------------
     # Public circuit factories
     # ------------------------------------------------------------------
 
@@ -284,16 +468,22 @@ class SeparateRegistersBuilder(CircuitBuilder):
 
         Circuit structure (``"hardware"`` mode)
         ---------------------------------------
-        Rank-:math:`d` per-frequency Hadamard test (Corollary 2 / Figure 7):
+        Rank-:math:`d` per-frequency Hadamard test (Corollary 2 / Figure 7)
+        built via **inline controlled-gate assembly**:
 
-        1. Inner :math:`\\mathcal{A}(U, P)` on ``(data, anc, freq_0, ...,
-           freq_{d-1})`` — ``anc`` is the parity-fold target and stays in
-           :math:`|0\\rangle` inside the block, so it cannot double as the
-           Hadamard-test control.
-        2. ``controlled_A = inner.to_gate().control(1, annotated=True)``.
-        3. Outer HT:
-           ``H → c-A → rank-d freq-selector CX ladder → H → measure(ht_control)``.
-           The selector shifts every ``freq_k`` simultaneously.
+        1. The HT-controlled :math:`\\mathcal{A}(U, P)` is constructed
+           gate-by-gate on the outer circuit using the controlled
+           primitives in :mod:`._controlled_ops` — c-RZZ / c-RXX / c-RYY
+           via basis-conjugated CX·CRZ·CX, CCX (Toffoli) for the
+           parity-cascade onto ``anc``, doubly-controlled cV± via MCX
+           cascades, and c-PauliGate(P) as a sequence of
+           ``cx``/``cy``/``cz``.  Mathematically identical to wrapping
+           the inner block in ``.control(1)``, but **never invokes
+           HighLevelSynthesis' controlled-unitary fallback**.
+        2. Outer HT:
+           ``H → c-A(U,P) (inline) → rank-d freq-selector CX ladder →
+           H → measure(ht_control)``.  The selector shifts every
+           ``freq_k`` simultaneously.
 
         Parameters
         ----------
@@ -336,42 +526,27 @@ class SeparateRegistersBuilder(CircuitBuilder):
             self._append_au_adjoint(qc, data, anc, freqs, x, tau, r_steps)
             return qc, freqs
 
-        # ---- "hardware" / "hardware_base" shared prefix ----------------
-        # The expensive step is ``inner.to_gate().control(1, annotated=True)``,
-        # executed exactly once per (x, tau, r_steps, pauli).
+        # ---- "hardware" / "hardware_base" inline-controlled assembly ----
+        # Build c-A(U, P) gate-by-gate using the controlled-rotation,
+        # controlled-Pauli, and doubly-controlled-cV± primitives in
+        # :mod:`._controlled_ops`.  Mathematically identical to wrapping
+        # the inner A(U, P) block in ``.control(1, annotated=True)`` but
+        # **synthesised entirely in the CX / CRX / CRY / CRZ / CCX / MCX
+        # basis** — no Quantum-Shannon decomposition fallback.  This is
+        # the optimisation that turned the n=3 hardware-mode runs from
+        # tens of minutes into seconds.
 
-        # (1) Inner A(U, P) on (data, anc, *freqs).
-        inner_data  = QuantumRegister(num_qubits, "data")
-        inner_anc   = QuantumRegister(1, "anc")
-        inner_freqs = [
-            QuantumRegister(n_s, f"freq_{q}") for q in range(self.model.d)
-        ]
-        inner = QuantumCircuit(inner_data, inner_anc, *inner_freqs, name="A_UP")
-        self._append_au_forward(
-            inner, inner_data, inner_anc, inner_freqs, x, tau, r_steps
-        )
-        inner.append(PauliGate(pauli), list(inner_data))
-        self._append_au_adjoint(
-            inner, inner_data, inner_anc, inner_freqs, x, tau, r_steps
-        )
-
-        # (2) Lazy controlled-A (annotated synthesis).
-        controlled_A = inner.to_gate(label="A_UP").control(1, annotated=True)
-
-        # (3) Outer HT skeleton shared between both hardware modes.
         ht_control = QuantumRegister(1, "ht_control")
         creg = ClassicalRegister(1, "creg")
         qc = QuantumCircuit(ht_control, data, anc, *freqs, creg)
+        ht = ht_control[0]
 
-        freq_qubits_flat: list = []
-        for fr in freqs:
-            freq_qubits_flat.extend(list(fr))
-
-        qc.h(ht_control[0])
-        qc.append(
-            controlled_A,
-            [ht_control[0], *data, *anc, *freq_qubits_flat],
-        )
+        qc.h(ht)
+        # c-A(U) (forward) ─ c-PauliGate(P) ─ c-A(U)† (adjoint)
+        # — the entire HT-controlled inner block, inlined.
+        self._append_ctrl_au_forward(qc, ht, data, anc, freqs, x, tau, r_steps)
+        append_ctrl_pauli_string(qc, ht, list(data), pauli)
+        self._append_ctrl_au_adjoint(qc, ht, data, anc, freqs, x, tau, r_steps)
 
         if execution_mode == "hardware_base":
             # Prefix only; caller appends the rank-d CX ladder + HT tail.
