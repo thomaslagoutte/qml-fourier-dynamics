@@ -1,131 +1,231 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+"""
+Hardware-mode validation of the Schwinger ℤ₂ lattice gauge theory.
+LASSO version: explicit Fourier feature extraction instead of kernel.
+"""
+
 import time
 import numpy as np
 import matplotlib.pyplot as plt
-from qiskit.primitives import StatevectorSampler
 
+# ----------------------------------------------------------------------
+# Quantum-Learning-Dynamics imports
+# ----------------------------------------------------------------------
 from quantum_learning_dynamics import Experiment
-from quantum_learning_dynamics.hamiltonians.tfim import TFIM, InhomogeneousTFIM
-from quantum_learning_dynamics.observables.library import LocalMagnetization, StaggeredMagnetization
-from quantum_learning_dynamics.features.engines import FeatureEngine
+from quantum_learning_dynamics.hamiltonians.schwinger import SchwingerZ2Model
+from quantum_learning_dynamics.observables.library import LocalMagnetization
+
+# ----------------------------------------------------------------------
+# Qiskit Aer imports (shot-based hardware simulation)
+# ----------------------------------------------------------------------
 from qiskit_aer import AerSimulator
 from qiskit_aer.primitives import SamplerV2 as AerSamplerV2
 
+# ----------------------------------------------------------------------
+# Plot style
+# ----------------------------------------------------------------------
 plt.rcParams.update({
-    'figure.dpi': 120, 
-    'axes.grid': True, 
-    'grid.alpha': 0.3, 
-    'font.family': 'sans-serif'
+    "figure.dpi": 120,
+    "axes.grid": True,
+    "grid.alpha": 0.3,
+    "font.family": "sans-serif",
 })
 
+# ----------------------------------------------------------------------
+# 1. Model, observable, and random seed
+# ----------------------------------------------------------------------
+SEED = 7
+rng = np.random.default_rng(SEED)
 
-# # Setup a simple d=1 model to verify the Hadamard Test mechanics
-# model_1d = TFIM(num_qubits=3)
-# observable_1d = LocalMagnetization(num_qubits=3, site=0) 
-# pauli = "IIZ"
-# x_graph = [(0, 1), (1, 2)] 
-# tau = 1.0
-# r_steps = 1
-# max_freq = 2 * r_steps * model_1d.num_qubits
-# rng = np.random.default_rng(42)
+model = SchwingerZ2Model(
+    num_matter=4,
+    mass=0.5,
+    electric_field=1.0,
+    g_range=(0.6, 1.4)
+)
+obs = LocalMagnetization(num_qubits=model.num_qubits, site=0)
 
-# # 1. Exact Statevector Baseline (shots=None)
-# engine_exact = FeatureEngine(
-#     model=model_1d, trotter_order=1, execution_mode="emulator", 
-#     shots=None, sampler=None, rng=rng
-# )
-# b_sv = engine_exact._extract_emulator(x_graph, tau, r_steps, pauli, max_freq)
+# ----------------------------------------------------------------------
+# 2. Training / test topology split
+# ----------------------------------------------------------------------
+X_train = (
+    [[True,  True,  True ]] * 1 +
+    [[False, True,  True ]] * 1 +
+    [[True,  False, True ]] * 1 +
+    [[True,  True,  False]] * 1
+)
+rng.shuffle(X_train)
 
-# # 2. Shot-based Hardware Emulation (shots=8000)
-# shots = (500)
-# engine_hw = FeatureEngine(
-#     model=model_1d, trotter_order=1, execution_mode="hardware", 
-#     shots=shots, sampler=StatevectorSampler(), rng=rng  
-# )
-# b_hw = engine_hw._extract_emulator(x_graph, tau, r_steps, pauli, max_freq)
+test_state = [True, False, False]
 
-# # 3. Compare Results
-# freqs = np.arange(-max_freq, max_freq + 1)
+# ----------------------------------------------------------------------
+# 3. Exact reference trajectories
+# ----------------------------------------------------------------------
+T_DENSE = np.linspace(0.0, 3.0, 100)
+T_VALS  = np.linspace(0.01, 3.0, 13)
 
-# print(f"Comparing Extraction Methods (Shots = {shots})")
-# print(f"Expected RMS Error: {1/np.sqrt(shots):.4f}\n")
-# print(f"{'Freq':>5} | {'Statevector':>11} | {'Hardware':>11} | {'Diff':>6}")
-# print("-" * 43)
+alpha_star = model.sample_alpha(rng)
 
-# for f, sv, hw in zip(freqs, b_sv, b_hw):
-#     if abs(sv) > 1e-3 or abs(hw) > 1.5/np.sqrt(shots):
-#         print(f"{f:5d} | {sv:11.4f} | {hw:11.4f} | {abs(sv-hw):6.4f}")
+O_mat = obs.to_sparse_pauli_op().to_matrix()
+n_qubits = model.num_qubits
 
-# rms_error = np.sqrt(np.mean((b_sv - b_hw)**2))
-# print("-" * 43)
-# print(f"Measured RMS Error: {rms_error:.4f}")
+exact_dense = np.empty(len(T_DENSE))
+for i, t in enumerate(T_DENSE):
+    if t == 0.0:
+        psi = np.zeros(2**n_qubits, dtype=complex)
+        psi[0] = 1.0
+    else:
+        U = model.exact_unitary(test_state, alpha_star, float(t))
+        psi = U[:, 0]
+    exact_dense[i] = float(np.real(np.conj(psi) @ O_mat @ psi))
 
-# # Run the full ML pipeline purely on shot-based features
-# exp_hw = Experiment(
-#     model=model_1d,
-#     observable=observable_1d,
-#     method="lasso",               
-#     execution_mode="hardware",    
-#     shots=500,
-#     sampler=AerSamplerV2.from_backend(AerSimulator(method="statevector")),              
-#     tau=1.5,
-#     r_steps=2,
-#     lasso_alpha=0.001,  # Threshold the noise
-#     seed=42
-# )
+exact_vals = np.empty(len(T_VALS))
+for i, t in enumerate(T_VALS):
+    U = model.exact_unitary(test_state, alpha_star, float(t))
+    psi = U[:, 0]
+    exact_vals[i] = float(np.real(np.conj(psi) @ O_mat @ psi))
 
-# result_hw = exp_hw.run(num_train=30, num_test=10)
-
-# print(f"--- Hardware PAC-Learning Results ({exp_hw.shots} shots/circuit) ---")
-# print(f"Trotter Generalization MSE: {result_hw.mse_trotter:.6f}")
-# print(f"Exact Physics MSE:          {result_hw.mse_exact:.6f}\n")
-
-# print("Predictions on Unseen Topologies:")
-# for i in range(5):
-#     print(f"Test {i}: True = {result_hw.y_true_trotter[i]:+.4f} | Pred = {result_hw.y_pred[i]:+.4f}")
-
-from qiskit_aer.primitives import SamplerV2 as AerSamplerV2
-
-# The highly-optimized V100 GPU Engine
+# ----------------------------------------------------------------------
+# 4. Hardware backend
+# ----------------------------------------------------------------------
 optimized_gpu_sim = AerSimulator(
     method="statevector",
     device="GPU",
-    precision="single",          # 1. Double the math speed, halve the memory
-    max_parallel_experiments=0,  # 2. Automatically saturate the 32GB VRAM
-    batched_shots_gpu=True       # 3. Offload measurement RNG to the GPU
+    precision="single",
+    max_parallel_experiments=0  # We can set this back to 0 since we chunked the payload!
+    # REMOVED: batched_shots_gpu=True 
+)
+sampler = AerSamplerV2.from_backend(optimized_gpu_sim)
+
+# ----------------------------------------------------------------------
+# 5. Experiment loop (LASSO)
+# ----------------------------------------------------------------------
+R_STEPS = 5
+LASSO_ALPHA = 1e-3
+SHOTS = 5000
+
+trotter_pts = np.empty(len(T_VALS))
+pac_pts     = np.empty(len(T_VALS))
+
+print("\nRunning hardware-mode validation (LASSO)…\n")
+
+for idx, tau in enumerate(T_VALS):
+    t0 = time.time()
+
+    # --------------------------------------------------------------
+    # 5a) Build Experiment (LASSO)
+    # --------------------------------------------------------------
+    exp = Experiment(
+        model=model,
+        observable=obs,
+        method="lasso",                 # ✅ switched here
+        execution_mode="hardware",
+        sampler=sampler,
+        shots=SHOTS,
+        tau=float(tau),
+        r_steps=R_STEPS,
+        trotter_order=1,
+        lasso_alpha=LASSO_ALPHA,
+        seed=SEED
+    )
+
+    # --------------------------------------------------------------
+    # 5b) Training labels
+    # --------------------------------------------------------------
+    y_train = exp.compute_trotter_labels(
+        X_train, alpha_star, float(tau), R_STEPS
+    )
+
+    # --------------------------------------------------------------
+    # 5c) Feature extraction (train)
+    # --------------------------------------------------------------
+    B_train = exp.engine.extract(
+        X_train, float(tau), R_STEPS, obs
+    )
+
+    exp.learner.fit(B_train, y_train)
+
+    # --------------------------------------------------------------
+    # 5d) Feature extraction (test)
+    # --------------------------------------------------------------
+    B_test = exp.engine.extract(
+        [test_state], float(tau), R_STEPS, obs
+    )
+
+    pac_pts[idx] = float(exp.learner.predict(B_test)[0])
+
+    # --------------------------------------------------------------
+    # 5e) Exact Trotter reference
+    # --------------------------------------------------------------
+    trotter_pts[idx] = float(
+        exp.compute_trotter_labels(
+            [test_state], alpha_star, float(tau), R_STEPS
+        )[0]
+    )
+
+    # --------------------------------------------------------------
+    # 5f) Logging
+    # --------------------------------------------------------------
+    print(
+        f"t={tau:5.2f} | Exact: {exact_vals[idx]:+.4f} | "
+        f"Trotter: {trotter_pts[idx]:+.4f} | LASSO: {pac_pts[idx]:+.4f} | "
+        f"Time: {time.time() - t0:.1f}s"
+    )
+
+# ----------------------------------------------------------------------
+# 6. Metrics
+# ----------------------------------------------------------------------
+mse_trotter = np.mean((pac_pts - trotter_pts) ** 2)
+mse_exact   = np.mean((pac_pts - exact_vals) ** 2)
+
+print("\n--- Summary ---")
+print(f"Trotter-generalization MSE: {mse_trotter:.6f}")
+print(f"Exact-physics MSE:          {mse_exact:.6f}")
+
+# ----------------------------------------------------------------------
+# 7. Plot
+# ----------------------------------------------------------------------
+fig, ax = plt.subplots(figsize=(10, 6))
+
+ax.plot(
+    T_DENSE, exact_dense,
+    label="Exact (statevector)",
+    color="#a8cce3",
+    linewidth=4,
+    alpha=0.8
 )
 
-optimized_cpu_sim = AerSimulator(
-    method="statevector",
-    device="CPU",                 # <--- Back to CPU
-    max_parallel_threads=110,     # <--- Weaponize 110 of your 112 cores
-    max_parallel_experiments=0    # <--- Run as many circuits at once as possible
+ax.plot(
+    T_VALS, trotter_pts,
+    label=f"Trotter (r={R_STEPS})",
+    color="#1f78b4",
+    linewidth=2,
+    linestyle="--"
 )
 
-# Setup a d>1 model
-model_nd = InhomogeneousTFIM(num_qubits=3)
-obs_nd = StaggeredMagnetization(num_qubits=3)
-
-exp_kernel = Experiment(
-    model=model_nd,
-    observable=obs_nd,
-    method="kernel",              # Overlap Circuit (Bypasses Tensor)
-    execution_mode="hardware",    # Fast O(M) Statevector caching
-    sampler=AerSamplerV2.from_backend(optimized_cpu_sim),
-    shots=5000,                   # Inject Binomial Hardware Noise
-    tau=1.0,
-    r_steps=2,
-    kernel_alpha=0.05,            # Higher Ridge penalty for noisy Gram matrix
-    seed=42
+ax.scatter(
+    T_VALS, pac_pts,
+    label="LASSO (hardware)",
+    color="black",
+    marker="o",
+    s=40,
+    zorder=5
 )
 
-# This would take ~1 hour on Qiskit Sampler, but completes in < 1 second here!
-t0 = time.time()
-result_kernel = exp_kernel.run(num_train=20, num_test=10, show_progress=True)
-exec_time = time.time() - t0
+ax.set_xlabel("Evolution time $t$")
+ax.set_ylabel(r"$\langle O(t) \rangle$")
+ax.set_title(
+    "Schwinger $\\mathbb{Z}_2$ LGT – LASSO Feature Learning\n"
+    "Hardware-mode validation",
+    fontsize=13,
+    pad=15
+)
 
-print(f"--- d>1 True Quantum Kernel Results ({exp_kernel.shots} shots) ---")
-print(f"Execution Time:             {exec_time:.2f} seconds")
-print(f"Trotter Generalization MSE: {result_kernel.mse_trotter:.6f}")
-print(f"Exact Physics MSE:          {result_kernel.mse_exact:.6f}")
+ax.grid(True, linestyle=":", alpha=0.6)
+ax.legend(loc="best", frameon=True, borderpad=1)
 
-
+fig.tight_layout()
+plt.savefig("hardware_validation_lasso.png", dpi=300)
+plt.show()  

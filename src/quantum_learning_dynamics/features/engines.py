@@ -12,7 +12,9 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+from tqdm import tqdm
 from qiskit.quantum_info import Statevector
+from qiskit import transpile
 
 from .._types import FeatureMatrix, GramMatrix, InputX
 from ..circuits.kernel_overlap import KernelOverlapBuilder
@@ -109,7 +111,7 @@ class FeatureEngine(_EngineBase):
             )
 
     def extract(
-        self, X_list: Sequence[InputX], tau: float, r_steps: int, observable: Observable
+        self, X_list: Sequence[InputX], tau: float, r_steps: int, observable: Observable, show_progress: bool = True
     ) -> FeatureMatrix:
         """Extract the flattened feature matrix for a batch of input graphs.
 
@@ -153,11 +155,11 @@ class FeatureEngine(_EngineBase):
 
                 if self.execution_mode == "emulator":
                     b_pauli = self._extract_emulator(
-                        x, tau, r_steps, pauli_str, max_freq
+                        x, tau, r_steps, pauli_str, max_freq, show_progress=show_progress # <-- Added
                     )
                 else:
                     b_pauli = self._extract_hardware(
-                        x, tau, r_steps, pauli_str, max_freq
+                        x, tau, r_steps, pauli_str, max_freq, show_progress=show_progress
                     )
 
                 B[i] += np.real(coeff) * b_pauli
@@ -165,31 +167,27 @@ class FeatureEngine(_EngineBase):
         return B
 
     def _extract_emulator(
-        self, x: InputX, tau: float, r_steps: int, pauli: str, max_freq: int
+        self, x: InputX, tau: float, r_steps: int, pauli: str, max_freq: int, show_progress: bool = True
     ) -> np.ndarray:
         """Evaluate features via optimized statevector simulation."""
         qc, freqs = self.builder.build_aup(
-            num_qubits=self.model.num_qubits,
-            x=x,
-            tau=tau,
-            r_steps=r_steps,
-            pauli=pauli,
-            execution_mode="statevector",
+            # ...
         )
         sv = Statevector(qc).data
         n_s = len(freqs[0])
 
         b_flat = np.zeros((2 * max_freq + 1) ** self.model.d, dtype=np.float64)
 
-        for flat_idx in range(len(b_flat)):
+        # The fast-moving granular loop!
+        for flat_idx in tqdm(range(len(b_flat)), desc=f"Emulator Features ({pauli})", leave=False, disable=not show_progress):
             sv_idx = self._map_to_sv_index(flat_idx, freqs, max_freq, n_s)
             exact_val = np.real(sv[sv_idx])
             b_flat[flat_idx] = self._apply_shot_noise(exact_val)
 
         return b_flat
-
+    
     def _extract_hardware(
-        self, x: InputX, tau: float, r_steps: int, pauli: str, max_freq: int
+        self, x: InputX, tau: float, r_steps: int, pauli: str, max_freq: int, show_progress: bool = True
     ) -> np.ndarray:
         """Evaluate features via batched execution on Qiskit primitives."""
         base_qc, freqs = self.builder.build_aup(
@@ -204,10 +202,11 @@ class FeatureEngine(_EngineBase):
         creg = base_qc.cregs[0]
         n_s = len(freqs[0])
 
-        pubs = []
+        raw_qcs = []
         dim = (2 * max_freq + 1) ** self.model.d
         
-        for flat_idx in range(dim):
+        # 1. Build circuits with conditional progress bar
+        for flat_idx in tqdm(range(dim), desc=f"Building Features ({pauli})", leave=False, disable=not show_progress):
             target_tuple = self._map_to_freq_tuple(flat_idx, max_freq, n_s)
             target = target_tuple[0] if self.model.d == 1 else target_tuple
 
@@ -215,18 +214,47 @@ class FeatureEngine(_EngineBase):
             self.builder._append_freq_selector(qc_l, ht_control, freqs, target)
             qc_l.h(ht_control[0])
             qc_l.measure(ht_control[0], creg[0])
-            pubs.append((qc_l,))
+            raw_qcs.append(qc_l)
 
-        job = self.sampler.run(pubs, shots=self.shots)
-        result = job.result()
+        # 2. Transpile with optimization_level=0 and a strict Aer basis.
+        # This protects the brilliant inline mcx cascades from _controlled_ops.py
+        # and prevents the CPU from grinding unrolled cx gates.
+        aer_basis = [
+            'id', 'rz', 'sx', 'x', 'y', 'z', 'h', 's', 'sdg', 'rx', 'ry', 
+            'cx', 'cy', 'cz', 'crx', 'cry', 'crz', 'ccx', 'mcx', 'measure'
+        ]
+        
+        for _ in tqdm(range(1), desc=f"Transpiling {len(raw_qcs)} Circuits", leave=False, disable=not show_progress):
+            transpiled_qcs = transpile(raw_qcs, basis_gates=aer_basis, optimization_level=0)
+        
+        if not isinstance(transpiled_qcs, list):
+            transpiled_qcs = [transpiled_qcs]
+        pubs = [(qc,) for qc in transpiled_qcs]
 
+        # 3. CRITICAL FIX: Chunked GPU Execution
         b_flat = np.zeros(len(pubs), dtype=np.float64)
-        for i in range(len(pubs)):
-            # Optimized V2 Sampler array extraction (bypasses slow dict construction)
-            bit_array = result[i].data.creg.array
-            n1 = int(np.sum(bit_array))
-            n0 = self.shots - n1
-            b_flat[i] = (n0 - n1) / self.shots
+        chunk_size = 500  # A safe, highly efficient payload size for Qiskit C++
+
+        # The new granular GPU progress bar!
+        for chunk_start in tqdm(
+            range(0, len(pubs), chunk_size), 
+            desc="GPU Simulation", 
+            leave=False, 
+            disable=not show_progress
+        ):
+            # Grab the next batch of 500
+            chunk_pubs = pubs[chunk_start : chunk_start + chunk_size]
+            
+            # Send them to the GPU
+            job = self.sampler.run(chunk_pubs, shots=self.shots)
+            result = job.result()
+
+            # 4. Extract bit arrays natively and free memory
+            for j in range(len(chunk_pubs)):
+                bit_array = result[j].data.creg.array
+                n1 = int(np.sum(bit_array))
+                n0 = self.shots - n1
+                b_flat[chunk_start + j] = (n0 - n1) / self.shots
 
         return b_flat
 
@@ -408,44 +436,59 @@ class KernelEngine(_EngineBase):
             if abs(c) > 1e-12
         ]
 
-        pubs = []
-        job_map = []
-
-        for i, x_i in enumerate(X1):
+        # 1. Create a list of pairs to track progress
+        pairs = []
+        for i in range(N1):
             start_j = i if symmetric else 0
             for j in range(start_j, N2):
-                x_j = X2[j]
+                pairs.append((i, j))
 
-                for h_idx, (pauli_h, _) in enumerate(paulis):
-                    for hp_idx, (pauli_hp, _) in enumerate(paulis):
-                        qc = self.builder.build_overlap(
-                            num_qubits=self.model.num_qubits,
-                            x1=x_i,
-                            x2=x_j,
-                            tau=tau,
-                            r_steps=r_steps,
-                            pauli1=pauli_h,
-                            pauli2=pauli_hp,
-                        )
-                        pubs.append((qc,))
-                        job_map.append((i, j, h_idx, hp_idx))
+        # 2. Iterate pair-by-pair with a live progress bar
+        for i, j in tqdm(pairs, desc="Hardware Gram Matrix", leave=False):
+            x_i = X1[i]
+            x_j = X2[j]
+            raw_qcs = []  # Store raw circuits here
+            job_map = []
 
-        job = self.sampler.run(pubs, shots=self.shots)
-        result = job.result()
+            for h_idx, (pauli_h, _) in enumerate(paulis):
+                for hp_idx, (pauli_hp, _) in enumerate(paulis):
+                    qc = self.builder.build_overlap(
+                        num_qubits=self.model.num_qubits,
+                        x1=x_i,
+                        x2=x_j,
+                        tau=tau,
+                        r_steps=r_steps,
+                        pauli1=pauli_h,
+                        pauli2=pauli_hp,
+                    )
+                    raw_qcs.append(qc)
+                    job_map.append((h_idx, hp_idx))
 
-        for k, (i, j, h_idx, hp_idx) in enumerate(job_map):
-            # Fast bit array summation
-            bit_array = result[k].data.creg.array
-            n1 = int(np.sum(bit_array))
-            n0 = self.shots - n1
-            noisy_overlap = (n0 - n1) / self.shots
+            # CRITICAL FIX: Transpile all 9 circuits at the exact same time
+            transpiled_qcs = transpile(raw_qcs, optimization_level=2)
+            
+            # Format them for the Sampler
+            if not isinstance(transpiled_qcs, list):
+                transpiled_qcs = [transpiled_qcs]
+            pubs = [(qc,) for qc in transpiled_qcs]
 
-            c_h = paulis[h_idx][1]
-            c_hp = paulis[hp_idx][1]
+            # 3. Submit the batch to the emulator
+            job = self.sampler.run(pubs, shots=self.shots)
+            result = job.result()
 
-            weight = np.real(c_h) * np.real(c_hp)
-            K[i, j] += weight * noisy_overlap
-            if symmetric and i != j:
-                K[j, i] += weight * noisy_overlap
+            for k, (h_idx, hp_idx) in enumerate(job_map):
+                # Fast bit array summation
+                bit_array = result[k].data.creg.array
+                n1 = int(np.sum(bit_array))
+                n0 = self.shots - n1
+                noisy_overlap = (n0 - n1) / self.shots
+
+                c_h = paulis[h_idx][1]
+                c_hp = paulis[hp_idx][1]
+
+                weight = np.real(c_h) * np.real(c_hp)
+                K[i, j] += weight * noisy_overlap
+                if symmetric and i != j:
+                    K[j, i] += weight * noisy_overlap
 
         return K

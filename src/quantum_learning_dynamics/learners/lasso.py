@@ -7,6 +7,8 @@ from typing import Optional
 import numpy as np
 from sklearn.linear_model import Lasso
 
+from tqdm import tqdm
+
 from .._types import FeatureMatrix, LabelVector
 from .base import Learner
 
