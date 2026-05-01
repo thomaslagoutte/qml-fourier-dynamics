@@ -88,15 +88,18 @@ for i, t in enumerate(T_VALS):
     exact_vals[i] = float(np.real(np.conj(psi) @ O_mat @ psi))
 
 # ----------------------------------------------------------------------
-# 4. Hardware backend
+# 4. Hardware backend (Optimized GPU Mode)
 # ----------------------------------------------------------------------
+from qiskit_aer import AerSimulator
+from qiskit_aer.primitives import SamplerV2 as AerSamplerV2
+
 optimized_gpu_sim = AerSimulator(
     method="statevector",
     device="GPU",
-    precision="single",
-    max_parallel_experiments=0  # We can set this back to 0 since we chunked the payload!
-    # REMOVED: batched_shots_gpu=True 
+    precision="single",  # CRITICAL: Use single precision to save VRAM on mega-batches
+    batched_shots_gpu=True # Tells Aer to aggressively batch shots on the GPU
 )
+
 sampler = AerSamplerV2.from_backend(optimized_gpu_sim)
 
 # ----------------------------------------------------------------------
