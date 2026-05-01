@@ -1,0 +1,12 @@
+\documentclass{standalone}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+\usepackage{tikz}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={22pt,between origins}, column sep=14pt, thin lines]
+\lstick{$\ket{0}_f$} & \gate[3]{A(U)} & \qw      & \gate[3]{A(U)^{\dagger}} & \qw                       & \qw \rstick[3]{$=A(U,P)$} \\
+\lstick{$\ket{0}_a$} &                & \qw      &                          & \gate{\ket{0}\!\bra{0}}   & \qw \\
+\lstick{$\ket{0}_c$} &                & \gate{P} &                          & \gate{\ket{0}\!\bra{0}}   & \qw
+\end{quantikz}
+\end{document}

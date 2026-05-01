@@ -1,0 +1,15 @@
+\documentclass{standalone}
+\usepackage{amsmath,amssymb}
+\usepackage{braket}
+\usepackage{bm}
+\renewcommand{\vec}[1]{\bm{#1}}
+\usepackage{tikz}
+\usepackage{quantikz}
+\begin{document}
+\begin{quantikz}[row sep={22pt,between origins}, column sep=14pt, thin lines]
+\lstick{$\ket{0}_{\mathrm{anc}}$} & \gate{H}  & \ctrl{1}            & \ctrl{1}             & \gate{H}  & \meter{Z} \\
+\lstick{$\ket{0}_f$}              & \qw       & \gate[3]{A(U,P)}    & \gate{V_{\vec l}}    & \qw       & \qw \\
+\lstick{$\ket{0}_a$}              & \qw       &                     & \qw                  & \qw       & \qw \\
+\lstick{$\ket{0}_c$}              & \qw       &                     & \qw                  & \qw       & \qw
+\end{quantikz}
+\end{document}

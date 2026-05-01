@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Learning Quantum Dynamics — Slides</title>
+
+  <!-- Inter font -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Tailwind (browser) – kept for any future Tailwind utilities -->
+  <script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+
+  <!-- MathJax configuration -->
+  <script>
+    window.MathJax = {
+      loader: {load: ['[tex]/physics']},
+      tex: {
+        packages: {'[+]': ['physics']},
+        inlineMath: [['$', '$']],
+        displayMath: [['$$', '$$']]
+      },
+      options: { skipHtmlTags: ['script','noscript','style','textarea'] }
+    };
+  </script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+  <style>
+   * { box-sizing: border-box; }
+  body { font-family: 'Inter', system-ui, sans-serif; background: #DDE4EE; }
+
+    .slide {
+      width: 1280px; height: 720px;
+      background: #ffffff;
+      position: relative; overflow: hidden;
+      border-radius: 10px;
+      box-shadow: 0 20px 60px rgba(10,61,98,0.13), 0 4px 16px rgba(10,61,98,0.07);
+      display: flex; flex-direction: column;
+      flex-shrink: 0;
+    }
+    .accent-bar {
+      position: absolute; top: 0; left: 0; right: 0; height: 4px;
+      background: linear-gradient(90deg, #0A3D62 0%, #0A84FF 55%, #38BDF8 100%);
+      z-index: 20;
+    }
+    .slide-footer {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 16px 8px 12px;
+      border-top: 1px solid #e5e7eb;
+      background: #f3f4f6;
+      flex-shrink: 0; z-index: 10;
+    }
+    .footer-left  { display: flex; align-items: center; gap: 6px; }
+    .footer-right { display: flex; align-items: center; gap: 12px; }
+    .roadmap-pill {
+      display: flex; align-items: center; gap: 5px;
+      background: white; border: 1px solid #e5e7eb;
+      border-radius: 6px; padding: 4px 10px;
+    }
+    .roadmap-pill .pl { font-size: 10px; font-weight: 700; color: #374151; }
+    .roadmap-pill .pd { font-size: 10px; color: #9ca3af; }
+    .r-arrow { font-size: 14px; color: #d1d5db; line-height: 1; }
+    .slide-num { font-size: 10.5px; font-weight: 600; color: #9ca3af; letter-spacing: 0.1em; }
+    .slide-title { font-size: 36px; font-weight: 800; color: #0A3D62; letter-spacing: -0.025em; }
+    .title-rule  { width: 44px; height: 3px; background: #0A84FF; border-radius: 999px; margin-top: 8px; }
+    .section-label {
+      font-size: 10px; font-weight: 700; color: #0A84FF;
+      letter-spacing: 0.13em; text-transform: uppercase; margin-bottom: 6px;
+    }
+
+    @media print {
+      body { background: white; gap: 0; padding: 0; }
+      .slide { page-break-after: always; box-shadow: none; border-radius: 0; }
+    }
+  </style>
+</head>
+
+<body class="flex flex-col items-center gap-10 py-10">
+
+<!-- ====================== SLIDE 01 ====================== -->
+<section class="slide">
+  <div class="accent-bar"></div>
+
+  <div class="flex-1 flex flex-col items-center justify-start px-20 py-14 space-y-6">
+    <div class="flex items-center gap-3 mb-6">
+      <div class="w-12 h-0.5" style="background:linear-gradient(90deg,transparent,#0A84FF)"></div>
+      <span class="text-xs font-semibold text-gray-600 uppercase tracking-wider">
+        Internship Project Presentation · The University of Tokyo · 23 April 2026
+      </span>
+      <div class="w-12 h-0.5" style="background:linear-gradient(90deg,#0A84FF,transparent)"></div>
+    </div>
+
+    <h1 class="text-5xl font-extrabold text-[#0A3D62] text-center leading-tight max-w-3xl tracking-tight">
+      Learning Quantum Dynamics via<br>
+      <span class="text-[#0A84FF]">Fourier Coefficient Extraction</span>
+    </h1>
+
+    <div class="inline-flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-full px-5 py-2">
+      <span class="text-sm text-[#0A3D62] font-medium">Barthe et al., 2025 (arXiv:2506.17089)</span>
+    </div>
+
+    <div class="w-14 h-1 rounded-full" style="background:linear-gradient(90deg,#0A3D62,#0A84FF)"></div>
+
+    <div class="text-center space-y-6">
+      <p class="text-2xl font-bold text-[#0A3D62]">Thomas Lagoutte- ‑Ferré</p>
+      <p class="text-sm text-gray-500">M2 QMI · Institut Polytechnique de Paris</p>
+      <p class="text-sm text-gray-400">Supervisor: Prof. Koji Terashi</p>
+    </div>
+
+    <div class="bg-gray-50 border border-gray-200 rounded-lg px-8 py-2 text-center">
+      <p class="text-sm font-semibold text-[#0A3D62]">
+        International Center for Elementary Particle Physics (ICEPP) · The University of Tokyo
+      </p>
+    </div>
+  </div>
+
+    <!-- Logos – centered a little higher -->
+    <div class="absolute inset-x-0 flex justify-center items-center gap-8" style="bottom:80px;">
+      <div class="bg-gray-50 border border-gray-200 rounded-md px-3 py-1">
+        <img src="icepp_logo.png" alt="ICEPP" style="height:88px;width:auto;object-fit:contain;">
+      </div>
+      <div class="bg-gray-50 border border-gray-200 rounded-md px-3 py-1">
+        <img src="utokyo_logo.png" alt="University of Tokyo" style="height:88px;width:auto;object-fit:contain;">
+      </div>
+    </div>
+
+  <div class="slide-footer">
+    <div class="footer-left">
+      <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Theory &amp; Algorithm</span></div>
+      <span class="r-arrow">›</span>
+      <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Implementation Stack</span></div>
+      <span class="r-arrow">›</span>
+      <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Experimental Results</span></div>
+    </div>
+    <div class="footer-right">
+      <span class="slide-num">01 / 26</span>
+    </div>
+  </div>
+</section>
+<!-- ====================== END SLIDE 01 ====================== -->
+
+<!-- ====================== SLIDE 02 ====================== -->
+<section class="slide">
+  <div class="accent-bar"></div>
+
+  <!-- Header – label removed -->
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;
+              padding:32px 48px 0 48px;flex-shrink:0;">
+    <div>
+      <h2 class="slide-title">Motivation &amp; Problem Setting</h2>
+      <div class="title-rule"></div>
+    </div>
+  </div>
+
+  <!-- Two‑column body -->
+  <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:0;
+              padding:20px 48px 0 48px;overflow:hidden;">
+
+    <!-- LEFT: text content -->
+    <div style="display:flex;flex-direction:column;gap:14px;
+                padding-right:28px;border-right:1px solid #f1f5f9;">
+
+      <!-- ──────────────────────  Problem Section ────────────────────── -->
+      <div>
+        <p class="section-label">The Learning Problem</p>
+        <p style="font-size:14px;color:#374151;line-height:1.65;">
+          <p class="font-size:14px font-bold text-[#0A3D62]">Setup:</p>We observe classical samples from an unknown quantum process:
+          $$\mathcal{T}^{\alpha} \;=\; \bigl\{(x_j,\,y_j)\bigr\}_{j=1}^{T}, \qquad y_j \;=\; f_\alpha(x_j) \;=\; \mel{0}{U^\dagger(x_j,\alpha)\,\hat{\mathcal{O}}\,U(x_j,\alpha)}{0}$$
+          where $x$ encodes the Hamiltonian <em>structure</em> (topology, couplings) and $\alpha \in [0,1]^d$ are <em>unknown global parameters</em> (e.g. coupling constants).
+        </p>
+      </div>
+
+      <div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:10px;padding:14px 16px;">
+        <p style="font-size:10px;font-weight:700;color:#1D4ED8;letter-spacing:0.1em;
+                  text-transform:uppercase;margin-bottom:10px;">Formal Objective</p>
+        <p style="font-size:15px;color:#1e3a5f;text-align:center;line-height:1.8;">
+          $f_\alpha(x)\;=\;\mel{\psi_0}{U^\dagger(x,\alpha)\;\hat{\mathcal{O}}\;U(x,\alpha)}{\psi_0}$
+        </p>
+
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <!-- Input $x$ -->
+          <div style="flex:1;background:white;border:1px solid #DBEAFE;border-radius:7px;
+                      padding:7px 8px;text-align:center;overflow:visible;">
+            <p style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;
+                      letter-spacing:0.09em;">Input $x$</p>
+            <p style="font-size:12px;color:#0A3D62;font-weight:600;margin-top:2px;">Graph topology</p>
+          </div>
+
+          <!-- Unknown α -->
+          <div style="flex:1;background:white;border:1px solid #DBEAFE;border-radius:7px;
+                      padding:7px 8px;text-align:center;overflow:visible;">
+            <p style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;
+                      letter-spacing:0.09em;">Unknown $\alpha$</p>
+            <p style="font-size:12px;color:#0A3D62;font-weight:600;margin-top:2px;">Coupling constants</p>
+          </div>
+
+          <!-- Label $y$ -->
+          <div style="flex:1;background:white;border:1px solid #DBEAFE;border-radius:7px;
+                      padding:7px 8px;text-align:center;overflow:visible;">
+            <p style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;
+                      letter-spacing:0.09em;">Label $y$</p>
+            <p style="font-size:12px;color:#0A3D62;font-weight:600;margin-top:2px;">Exp. value</p>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:10px;padding:12px 13px;">
+          <p style="font-size:9.5px;font-weight:700;color:#DC2626;letter-spacing:0.1em;
+                    text-transform:uppercase;margin-bottom:5px;">Why hard classically?</p>
+          <p style="font-size:12px;color:#374151;line-height:1.6;">
+            Evaluating $f_\alpha(x)$ may be <strong>BQP-hard</strong>.
+            Classical ML must approximate a function it cannot efficiently compute.
+          </p>
+        </div>
+        <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:12px 13px;">
+          <p style="font-size:9.5px;font-weight:700;color:#16A34A;letter-spacing:0.1em;
+                    text-transform:uppercase;margin-bottom:5px;">Why physically natural?</p>
+          <p style="font-size:12px;color:#374151;line-height:1.6;">
+            Data has direct <strong>physical meaning</strong>. Natural in HEP
+            lattice models where $\alpha$ = coupling constants.
+          </p>
+        </div>
+      </div>
+
+      <div style="background:#0A3D62;border-radius:10px;padding:12px 16px;
+                  display:flex;align-items:center;gap:12px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#38BDF8"
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        <p style="font-size:13px;color:white;font-weight:500;line-height:1.55;">
+          <strong style="color:#38BDF8;">Central question:</strong>
+          Can quantum access to $H$ yield an <em>exponential</em> learning advantage
+          over all classical algorithms?
+        </p>
+      </div>
+    </div>
+
+    <!-- RIGHT: pipeline diagram -->
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                padding-left:28px;gap:12px;">
+
+      <p style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:0.15em;
+                text-transform:uppercase;">Learning Pipeline</p>
+
+      <div style="width:100%;border:1px solid #E5E7EB;border-radius:12px;
+                  background:#F8FAFC;padding:10px;display:flex;
+                  align-items:center;justify-content:center;">
+        <img src="pac_learning_workflow.png"
+             alt="PAC learning pipeline"
+             style="max-width:100%;max-height:290px;object-fit:contain;border-radius:6px;">
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;">
+        <div style="border:1px solid #E5E7EB;border-radius:8px;background:white;
+                    padding:9px 11px;">
+          <p style="font-size:9.5px;font-weight:700;color:#0A3D62;text-transform:uppercase;
+                    letter-spacing:0.08em;margin-bottom:3px;">Learning Hamiltonian dynamics</p>
+          <p style="font-size:11.5px;color:#6B7280;line-height:1.5;">
+            Learn $f_\alpha(x)$ from classical data. No quantum state copies. Black‑box access to $e^{-iHt}$.
+          </p>
+        </div>
+        <div style="border:1px solid #BFDBFE;border-radius:8px;background:#EFF6FF;
+                    padding:9px 11px;">
+          <p style="font-size:9.5px;font-weight:700;color:#1D4ED8;text-transform:uppercase;
+                    letter-spacing:0.08em;margin-bottom:3px;">≠ Hamiltonian Learning</p>
+          <p style="font-size:11.5px;color:#374151;line-height:1.5;">
+            We do <em>not</em> recover $\alpha$. We predict observables — a strictly weaker, more practical task.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer – Tokyo logo now has the same thin border as IcePP and extra spacing -->
+  <div class="slide-footer">
+    <div class="footer-left">
+      <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Theory &amp; Algorithm</span></div>
+      <span class="r-arrow">›</span>
+      <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Implementation Stack</span></div>
+      <span class="r-arrow">›</span>
+      <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Experimental Results</span></div>
+    </div>
+    <div class="footer-right">
+      <!-- IcePP logo container -->
+      <div style="background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px;padding:3px 8px;
+                  display:flex;align-items:center;">
+        <img src="icepp_logo.png" alt="ICEPP"
+             style="height:28px;width:auto;object-fit:contain;">
+      </div>
+
+      <!-- Tokyo logo container – same thin border, slight left margin -->
+      <div style="background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px;padding:3px 8px;
+                  display:flex;align-items:center;margin-left:8px;">
+        <img src="utokyo_logo.png" alt="University of Tokyo"
+             style="height:28px;width:auto;object-fit:contain;">
+      </div>
+
+      <!-- Slide number – a bit farther from the logos -->
+      <span class="slide-num" style="margin-left:12px;">02 / 26</span>
+    </div>
+  </div>
+</section>
+<!-- ====================== END SLIDE 02 ====================== -->
+
+<!-- Force MathJax to typeset after the page is ready -->
+<script>
+  // Wait until MathJax has finished loading, then typeset the whole document
+  if (window.MathJax) {
+    MathJax.startup.promise.then(() => MathJax.typesetPromise());
+  }
+</script>
+
+</body>
+</html>

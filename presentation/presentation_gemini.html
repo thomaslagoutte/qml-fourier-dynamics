@@ -1,0 +1,1238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Learning Quantum Dynamics — Slides</title>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$']],
+    displayMath: [['$$', '$$']],
+    packages: {'[+]': ['ams', 'amssymb', 'mathtools', 'physics']}
+  }
+};
+</script>
+
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: #DDE4EE; margin: 0; padding: 40px 0; display: flex; flex-direction: column; align-items: center; gap: 40px; }
+
+    .slide {
+      width: 1280px; height: 720px;
+      background: #ffffff;
+      position: relative; overflow: hidden;
+      border-radius: 12px;
+      box-shadow: 0 24px 64px rgba(10,61,98,0.15), 0 8px 24px rgba(10,61,98,0.08);
+      display: flex; flex-direction: column;
+      flex-shrink: 0;
+    }
+    .accent-bar {
+      position: absolute; top: 0; left: 0; right: 0; height: 5px;
+      background: linear-gradient(90deg, #0A3D62 0%, #0A84FF 55%, #38BDF8 100%);
+      z-index: 20;
+    }
+    .slide-header {
+      padding: 32px 52px 0 52px;
+      flex-shrink: 0;
+    }
+    .slide-content {
+      flex: 1;
+      padding: 20px 52px 24px 52px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .slide-footer {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 24px 10px 16px;
+      border-top: 1px solid #e5e7eb;
+      background: #f8fafc;
+      flex-shrink: 0; z-index: 10;
+    }
+    .footer-left  { display: flex; align-items: center; gap: 8px; }
+    .footer-right { display: flex; align-items: center; gap: 14px; } 
+
+    .roadmap-pill {
+      display: flex; align-items: center; gap: 6px;
+      background: white; border: 1px solid #e2e8f0;
+      border-radius: 6px; padding: 5px 12px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+    }
+    .roadmap-pill .pl { font-size: 10.5px; font-weight: 700; color: #334155; }
+    .roadmap-pill .pd { font-size: 10.5px; color: #94a3b8; }
+    .r-arrow { font-size: 16px; color: #cbd5e1; line-height: 1; }
+    .slide-num { font-size: 11.5px; font-weight: 700; color: #94a3b8; letter-spacing: 0.1em; }
+
+    .slide-title { font-size: 36px; font-weight: 800; color: #0A3D62; letter-spacing: -0.02em; margin: 0; }
+    .title-rule  { width: 46px; height: 4px; background: #0A84FF; border-radius: 999px; margin-top: 10px; }
+
+    .section-label {
+      font-size: 11.5px; font-weight: 700; color: #0A84FF;
+      letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 8px;
+    }
+
+    /* Math blocks */
+    .math-block {
+      background: #F8FAFC; 
+      border: 1px solid #E2E8F0; 
+      border-radius: 8px; 
+      padding: 18px 24px; 
+      margin-bottom: 20px;
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03);
+      position: relative;
+    }
+    .math-block.def { border-left: 4.5px solid #0A84FF; }
+    .math-block.lem { border-left: 4.5px solid #10B981; }
+    .math-block.cor { border-left: 4.5px solid #8B5CF6; }
+
+    .math-block-title {
+      font-size: 15px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 12px 0;
+    }
+    .math-block.def .math-block-title { color: #0A84FF; }
+    .math-block.lem .math-block-title { color: #059669; }
+    .math-block.cor .math-block-title { color: #7C3AED; }
+
+    .math-block-body {
+      font-size: 15.5px; color: #334155; line-height: 1.6; margin: 0;
+    }
+    .theorem-text { font-style: italic; }
+
+    /* Cards */
+    .feature-card {
+      background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; padding: 18px;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.02);
+    }
+    .feature-card-title {
+      font-size: 13.5px; font-weight: 700; color: #0A3D62; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 10px 0;
+    }
+
+    /* Alerts */
+    .alert-block {
+      background: #0A3D62; border-radius: 8px; padding: 16px 20px;
+      display: flex; align-items: flex-start; gap: 14px; margin-top: auto;
+      box-shadow: 0 10px 25px rgba(10, 61, 98, 0.2);
+    }
+    .alert-block-title {
+      font-size: 12.5px; font-weight: 800; color: #38BDF8; text-transform: uppercase; letter-spacing: 0.1em; margin: 0 0 5px 0;
+    }
+    .alert-block-body {
+      font-size: 15.5px; color: #F8FAFC; line-height: 1.55; margin: 0;
+    }
+
+    /* Text */
+    p.base-text {
+      font-size: 15.5px; color: #334155; line-height: 1.6; margin: 0 0 20px 0;
+    }
+
+    /* Lists */
+    ul.custom-list {
+      margin: 0; padding-left: 20px; color: #334155; font-size: 15.5px; line-height: 1.6;
+    }
+    ul.custom-list li { margin-bottom: 8px; }
+    ul.custom-list li::marker { color: #0A84FF; font-weight: bold; }
+
+    ol.custom-list-num {
+      margin: 0; padding-left: 20px; color: #334155; font-size: 15.5px; line-height: 1.6;
+    }
+    ol.custom-list-num li { margin-bottom: 8px; padding-left: 4px; }
+    ol.custom-list-num li::marker { color: #0A84FF; font-weight: bold; }
+
+    /* Grayscale effect for footer logos */
+    .footer-right img {
+      filter: grayscale(100%);
+      opacity: 0.5;
+      transition: filter 0.2s ease, opacity 0.2s ease;
+    }
+    .footer-right img:hover {
+      filter: grayscale(0%);
+      opacity: 1;
+    }
+
+    /* Grayscale effect for roadmap pills (except PART I) */
+    .slide:not(:first-of-type) .footer-left .roadmap-pill:not(:first-child) {
+      filter: grayscale(100%);
+      opacity: 0.5;
+      transition: filter 0.2s ease, opacity 0.2s ease;
+    }
+    .slide:not(:first-of-type) .footer-left .roadmap-pill:not(:first-child):hover {
+      filter: grayscale(0%);
+      opacity: 1;
+    }
+
+    @media print {
+      body { background: white; gap: 0; padding: 0; }
+      .slide { page-break-after: always; box-shadow: none; border-radius: 0; }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- ==================== Slide 1 ==================== -->
+  <section class="slide">
+    <div class="accent-bar"></div>
+
+    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 60px 80px; gap: 24px;">
+      <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 20px;">
+        <div style="width: 56px; height: 2px; background: linear-gradient(90deg, transparent, #0A84FF);"></div>
+        <span style="font-size: 12px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.08em;">
+          Master Thesis Presentation · The University of Tokyo · 23 April 2026
+        </span>
+        <div style="width: 56px; height: 2px; background: linear-gradient(90deg, #0A84FF, transparent);"></div>
+      </div>
+
+      <h1 style="font-size: 50px; font-weight: 800; color: #0A3D62; text-align: center; line-height: 1.15; max-width: 960px; letter-spacing: -0.02em; margin: 0;">
+        Learning Quantum Dynamics via<br>
+        <span style="color: #0A84FF;">Fourier Coefficient Extraction</span>
+      </h1>
+
+      <div style="text-align: center; display: flex; flex-direction: column;">
+        <p style="font-size: 17px; color: #64748B; font-weight: 600;">Based on A. Barthe, M. Yaghubi Rad, M. Grossi &amp; V. Dunjko, arXiv:2506.17089 (2025)</p>
+      </div>
+
+      <div style="width: 64px; height: 4px; border-radius: 999px; background: linear-gradient(90deg, #0A3D62, #0A84FF); margin: 12px 0;"></div>
+
+      <div style="text-align: center; display: flex; flex-direction: column; gap: 18px; padding: 8px;">
+        <p style="font-size: 26px; font-weight: 800; color: #0A3D62; margin: 0;">Thomas Lagoutte‑Ferré</p>
+        <p style="font-size: 15.5px; font-weight: 500; color: #475569; margin: 0;">M2 Quantum, Mathématiques, Informatique (QMI) — Institut Polytechnique de Paris</p>
+        <p style="font-size: 15.5px; font-weight: 500; color: #475569; margin: 0;">International Center for Elementary Particle Physics (ICEPP), The University of Tokyo</p>
+        <p style="font-size: 15px; color: #64748B; margin: 6px 0 0 0;">Supervisor: <strong style="color: #0A3D62;">Koji Terashi</strong></p>
+      </div>
+    </div>
+
+    <!-- Centered logos (no grayscale effect on title slide) -->
+    <div style="position: absolute; left: 0; right: 0; bottom: 75px; display: flex; justify-content: center; align-items: center; gap: 0;">
+      <div style="padding: 6px 16px;">
+        <img src="ipp_logo.png" alt="IPP" style="height:60px;width:auto;object-fit:contain;">
+      </div>
+      <div style="padding: 6px 16px;">
+        <img src="utokyo_logo.png" alt="University of Tokyo" style="height:60px;width:auto;object-fit:contain;">
+      </div>
+      <div style="padding: 6px 16px;">
+        <img src="icepp_logo.png" alt="ICEPP" style="height:60px;width:auto;object-fit:contain;">
+      </div>
+    </div>
+
+    <div class="slide-footer">
+      <div class="footer-left">
+        <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework &amp; Fourier Structure</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design &amp; Proofs</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Beyond Log‑Parameters: Kernel</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation Stack</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+      </div>
+      <div class="footer-right">
+        <span class="slide-num">01 / 12</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== Slide 2 ==================== -->
+  <section class="slide">
+    <div class="accent-bar"></div>
+
+    <div class="slide-header">
+      <h2 class="slide-title">Motivation — Learning Quantum Dynamics from Classical Data</h2>
+      <div class="title-rule"></div>
+    </div>
+
+    <div class="slide-content">
+      <p class="base-text">
+        <strong style="color: #0A3D62;">Supervised task.</strong> Given i.i.d. samples $\mathcal D_T=\{(\boldsymbol{x}_t,y_t)\}_{t=1}^{T}\sim\mathcal{D}^{T}$ with labels $y_t = f_{\boldsymbol{\alpha}}(\boldsymbol{x}_t)$, where
+        $$f_{\boldsymbol{\alpha}}(\boldsymbol{x})\;=\;\mel{\psi(\boldsymbol{x},\boldsymbol{\alpha})}{O}{\psi(\boldsymbol{x},\boldsymbol{\alpha})}, \qquad \ket{\psi(\boldsymbol{x},\boldsymbol{\alpha})}=e^{\,i\,H(\boldsymbol{x},\boldsymbol{\alpha})\,t}\ket{\psi_0}$$
+        return $h$ that $\varepsilon$-approximates $f_{\boldsymbol{\alpha}}$ on unseen $\boldsymbol{x}\sim\mathcal{D}$ (PAC sense, formalised next slide).
+      </p>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 36px; margin-bottom: 20px;">
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+          <div>
+            <p class="section-label">Two faces of the same concept class</p>
+            <ul class="custom-list">
+              <li><strong style="color: #DC2626;">Hamiltonian dynamics</strong> (physical): $f_{\boldsymbol{\alpha}}(\boldsymbol{x})=\mel{\psi(\boldsymbol{x},\boldsymbol{\alpha})}{O}{\psi(\boldsymbol{x},\boldsymbol{\alpha})}$.</li>
+              <li><strong style="color: #DC2626;">PQC functions</strong> (algorithmic): $h_{\boldsymbol{\alpha}}(\boldsymbol{x})=\mel{0}{U^{\dagger}(\boldsymbol{x},\boldsymbol{\alpha})\,O\,U(\boldsymbol{x},\boldsymbol{\alpha})}{0}$.</li>
+              <li>Bridged by Hamiltonian simulation (Trotter, qubitization, LCU).</li>
+            </ul>
+          </div>
+          <div>
+            <p class="section-label">Knowns vs. unknowns</p>
+            <ul class="custom-list">
+              <li>$\boldsymbol{x}$: per‑sample data (e.g. lattice mask $x_{ij}\!\in\!\{0,1\}$).</li>
+              <li>$\boldsymbol{\alpha}\!\in\![0,1]^{d}$: <em>unknown, fixed</em> global couplings (transverse field, mass, gauge coupling, ...).</li>
+            </ul>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center;">
+          <div style="width: 100%; border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; padding: 16px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.02);">
+            <img src="pac_learning_workflow.png" alt="PAC learning pipeline" style="max-width: 100%; max-height: 220px; object-fit: contain; border-radius: 6px;">
+          </div>
+          <p style="font-size: 12.5px; color: #64748B; font-style: italic; margin-top: 12px; text-align: center; line-height: 1.5;">
+            Bridge between physical dynamics and PQC functions; PAC‑learnability transfers across it.<br>Adapted from Barthe et al. (2025).
+          </p>
+        </div>
+      </div>
+
+      <div class="alert-block">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;">
+          <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        <div>
+          <p class="alert-block-title">Central question</p>
+          <p class="alert-block-body">
+            Evaluating $f_{\boldsymbol{\alpha}}(\boldsymbol{x})$ is generically <strong>$\mathsf{BQP}$‑hard</strong> $\Rightarrow$ a classical learner cannot even generate its own labels.<br>
+            <em>Can quantum access to the dynamics yield a provably efficient PAC learner where no classical algorithm can?</em>
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="slide-footer">
+      <div class="footer-left">
+        <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Kernel Method</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+      </div>
+      <div class="footer-right">
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="ipp_logo.png" alt="IPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="icepp_logo.png" alt="ICEPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;">
+          <img src="utokyo_logo.png" alt="University of Tokyo" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <span class="slide-num" style="margin-left:8px;">02 / 12</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== Slide 3 ==================== -->
+  <section class="slide">
+    <div class="accent-bar"></div>
+
+    <div class="slide-header">
+      <h2 class="slide-title">Probably Approximately Correct (PAC) Learning — definition</h2>
+      <div class="title-rule"></div>
+    </div>
+
+    <div class="slide-content">
+      <p class="base-text">
+        Originally introduced by L. Valiant (1984); we use the <em>efficient, distribution‑independent</em> formulation of Barthe et al. (Def. 1).
+      </p>
+
+      <div class="math-block def" style="margin-bottom: 28px;">
+        <p class="math-block-title">Definition 1 — Efficient PAC learnability (Barthe et al., 2025)</p>
+        <div class="math-block-body theorem-text">
+          A concept class $\mathcal{C}=\{\mathcal{C}_n\}_n$ with $c:\mathcal X_n\to\mathcal Y_n\in\mathcal{C}_n$ is <em>efficiently PAC‑learnable</em> iff there exists an algorithm $\mathcal{A}$ such that,
+          <div style="text-align: center; margin: 16px 0; color: #0A3D62; font-weight: 500; font-style: italic; background: rgba(10, 132, 255, 0.05); padding: 10px; border-radius: 6px;">
+            $\forall\,n,\;\forall\,\varepsilon{>}0,\;\forall\,\delta{\in}(0,1],\; \forall\,c\in\mathcal{C}_n,\;\forall$ target distribution $\mathcal{D}$ on $\mathcal X_n$,
+          </div>
+          given an i.i.d. training dataset $\{(\boldsymbol{x}_t,c(\boldsymbol{x}_t))\}_{t=1}^{T}\sim\mathcal{D}^{T}$ of size $T\in\mathrm{poly}(n,\varepsilon^{-1},\delta^{-1})$, $\mathcal{A}$ returns a hypothesis $h=\mathcal{A}(T,\varepsilon,\delta)$ in time $\mathrm{poly}(n,\varepsilon^{-1},\delta^{-1})$ satisfying
+          $$ \Pr_{\boldsymbol{x}\sim\mathcal{D}}\!\bigl[\, \lvert h(\boldsymbol{x})-c(\boldsymbol{x})\rvert\le\varepsilon \,\bigr]\;\ge\;1-\delta. $$
+        </div>
+      </div>
+
+      <div style="background: #FEF2F2; border: 1px solid #FECACA; border-radius: 8px; padding: 18px 24px; margin-top: auto; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.05);">
+        <p style="font-size: 13px; font-weight: 800; color: #DC2626; letter-spacing: 0.1em; text-transform: uppercase; margin-top: 0; margin-bottom: 8px;">Reading guide</p>
+        <p style="font-size: 15.5px; color: #4A0404; line-height: 1.6; margin: 0;">
+          <strong>Approximately</strong> = error $\le\varepsilon$; <strong>Probably</strong> = with confidence $\ge 1-\delta$;<br>
+          <strong>Efficient</strong> = sample size <em>and</em> runtime polynomial in $(n,\varepsilon^{-1},\delta^{-1})$;<br>
+          <strong>Distribution‑independent</strong> = the bound must hold for <em>any</em> $\mathcal{D}$.<br>
+          <span style="display: block; margin-top: 10px; font-weight: 600; color: #991B1B;">$\Longrightarrow$ a much stronger requirement than typical statistical‑learning average‑case guarantees.</span>
+        </p>
+      </div>
+    </div>
+
+    <div class="slide-footer">
+      <div class="footer-left">
+        <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Kernel Method</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+      </div>
+      <div class="footer-right">
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="ipp_logo.png" alt="IPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="icepp_logo.png" alt="ICEPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;">
+          <img src="utokyo_logo.png" alt="University of Tokyo" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <span class="slide-num" style="margin-left:8px;">03 / 12</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== Slide 4 ==================== -->
+  <section class="slide">
+    <div class="accent-bar"></div>
+
+    <div class="slide-header">
+      <h2 class="slide-title">PAC Learning — quantum vs. classical, separation target</h2>
+      <div class="title-rule"></div>
+    </div>
+
+    <div class="slide-content">
+      <p class="base-text">
+        PAC learnability is parameterized by the <em>model of computation</em> granted to the learner; everything else (samples, distribution, guarantees) is identical.
+      </p>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 36px; margin-bottom: 24px;">
+        <div class="feature-card">
+          <p class="feature-card-title">Classical‑efficient PAC</p>
+          <p style="font-size: 15.5px; color: #334155; line-height: 1.6; margin: 0;">
+            $\mathcal{A}$ and $h$ are uniform classical poly‑time TMs (or non‑uniform: belong to $\mathsf{P/poly}$).<br><br>
+            Lower bounds typically come from <em>cryptographic</em> or <em>complexity‑theoretic</em> hardness.
+          </p>
+        </div>
+        
+        <div class="feature-card" style="border-color: #BAE6FD; background: #F0F9FF;">
+          <p class="feature-card-title" style="color: #0284C7;">Quantum‑efficient PAC</p>
+          <p style="font-size: 15.5px; color: #0C4A6E; line-height: 1.6; margin: 0;">
+            $\mathcal{A}$ is a uniform quantum poly‑time circuit; the hypothesis $h$ may be evaluated by a quantum sub‑routine on a fresh $\boldsymbol{x}$.<br><br>
+            Same PAC bound; the only relaxation is the hardware.
+          </p>
+        </div>
+      </div>
+
+      <p style="font-size: 15.5px; color: #334155; line-height: 1.6; margin-top: 0; margin-bottom: 24px; padding-left: 16px; border-left: 4px solid #0A84FF;">
+        <strong style="color: #0A3D62;">The labels are quantum either way.</strong> Both learners receive the same dataset $\{(\boldsymbol{x}_t,c(\boldsymbol{x}_t))\}_t$; generating $c(\boldsymbol{x}_t)$ for the concept classes we will consider already requires $\mathsf{BQP}$ power.
+      </p>
+
+      <div class="alert-block">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+        </svg>
+        <div>
+          <p class="alert-block-title">Target separation (Barthe et al., Thm. 2 & Thm. 3)</p>
+          <p class="alert-block-body">
+            Exhibit a family $\mathcal{C}$ that is <strong style="color: #38BDF8;">efficiently <em>quantum</em> PAC‑learnable</strong> <em>and</em>, under the standard complexity hypothesis 
+            <span style="background: rgba(255,255,255,0.15); padding: 3px 8px; border-radius: 4px; font-family: monospace;">$\mathsf{BQP}\not\subseteq\mathsf{P/poly}$</span>, 
+            <strong style="color: #F87171;"><em>not</em> efficiently classically PAC‑learnable</strong>.<br>
+            $\Rightarrow$ provable, super‑polynomial quantum‑classical learning advantage on a <em>natural, physically motivated</em> task.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="slide-footer">
+      <div class="footer-left">
+        <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Kernel Method</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+      </div>
+      <div class="footer-right">
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="ipp_logo.png" alt="IPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="icepp_logo.png" alt="ICEPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;">
+          <img src="utokyo_logo.png" alt="University of Tokyo" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <span class="slide-num" style="margin-left:8px;">04 / 12</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== Slide 5 ==================== -->
+  <section class="slide">
+    <div class="accent-bar"></div>
+
+    <div class="slide-header">
+      <h2 class="slide-title">Pauli‑encoded PQCs — state‑level Fourier structure</h2>
+      <div class="title-rule"></div>
+    </div>
+
+    <div class="slide-content">
+      
+      <div class="math-block def" style="margin-top: 12px;">
+        <p class="math-block-title">Definition 2 — Pauli encoding (Barthe et al., 2025)</p>
+        <div class="math-block-body theorem-text">
+          A <em>Pauli‑encoded circuit</em> on $n$ qubits is a unitary $U:\boldsymbol{\alpha}\in[0,1]^{d}\to U(2^{n})$ composed of $N_f\in\mathrm{poly}(n)$ fixed gates and $L\in\mathrm{poly}(n)$ parametrized gates
+          $$ V_l(\boldsymbol{\alpha})\;:=\;e^{\,i\pi\,P_l\,\alpha_{i_l}}, \qquad P_l\in\{I,X,Y,Z\} \otimes n,\;\; i_l\in\{1,\dots,d\}. $$
+          The same parameter $\alpha_{i_l}$ may be <em>re‑uploaded</em> (used in several $V_l$'s) — essential for Trotterized evolutions.
+        </div>
+      </div>
+
+      <div class="math-block lem" style="margin-bottom: 24px;">
+        <p class="math-block-title">Lemma 1 — Fourier representation of $U(\boldsymbol{\alpha})\ket{0}$ (Schuld–Sweke–Meyer, 2021)</p>
+        <div class="math-block-body theorem-text">
+          Any Pauli‑encoded circuit produces a state that is a <em>finite trigonometric polynomial</em> in $\boldsymbol{\alpha}$:
+          $$ \ket{\phi(\boldsymbol{\alpha})}\;=\;U(\boldsymbol{\alpha})\ket{0}\;=\; \sum_{k=1}^{2^{n}}\;\sum_{\vec l\in[-L,+L]^{d}}\! a_{\vec l,k}\,e^{\,i\pi\,\boldsymbol{\alpha}\cdot\vec l}\,\ket{k}, \qquad a_{\vec l,k}\in\mathbb{C}. $$
+          Unknowns $\boldsymbol{\alpha}$ appear <em>only as global phases</em>; the amplitudes $a_{\vec l,k}$ are $\boldsymbol{\alpha}$‑independent structural data.
+        </div>
+      </div>
+
+      <div style="background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 8px; padding: 20px 24px; margin-top: auto; box-shadow: 0 4px 12px rgba(22, 101, 52, 0.05);">
+        <p style="font-size: 15.5px; color: #14532D; line-height: 1.6; margin: 0;">
+          $\Rightarrow$ every Trotter / qubitization / LCU realisation of $e^{iH(\boldsymbol{x},\boldsymbol{\alpha})t}$ belongs to Definition 2; the theory will transfer to physical Hamiltonian dynamics in Sec. V.
+        </p>
+      </div>
+    </div>
+
+    <div class="slide-footer">
+      <div class="footer-left">
+        <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Kernel Method</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+      </div>
+      <div class="footer-right">
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="ipp_logo.png" alt="IPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="icepp_logo.png" alt="ICEPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;">
+          <img src="utokyo_logo.png" alt="University of Tokyo" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <span class="slide-num" style="margin-left:8px;">05 / 12</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== Slide 6 ==================== -->
+  <section class="slide">
+    <div class="accent-bar"></div>
+
+    <div class="slide-header">
+      <h2 class="slide-title">Pauli‑encoded PQCs — expectation values as Fourier series</h2>
+      <div class="title-rule"></div>
+    </div>
+
+    <div class="slide-content">
+      
+      <div class="math-block cor" style="margin-top: 12px; margin-bottom: 32px;">
+        <p class="math-block-title">Corollary 1 — PQC function (Eqs. (4)–(8) of Barthe et al.)</p>
+        <div class="math-block-body theorem-text">
+          For a Pauli observable $P$, the PQC function
+          $$ f(\boldsymbol{\alpha})\;=\;\mel{0}{U^{\dagger}(\boldsymbol{\alpha})\,P\,U(\boldsymbol{\alpha})}{0} \;=\; \sum_{\vec l\in\mathcal{L}}\,b_{\vec l}\,e^{\,i\pi\,\boldsymbol{\alpha}\cdot\vec l}, \qquad \mathcal{L}:=[-2L,+2L]^{d}, $$
+          is a finite trigonometric polynomial with at most $m:=(4L+1)^{d}$ frequencies, coefficients $\boldsymbol{b}=(b_{\vec l})_{\vec l\in\mathcal{L}}\in\mathbb{C}^{m}$.
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 40px;">
+        <div>
+          <p class="section-label">Lattice doubling $L\!\to\!2L$</p>
+          <p style="font-size: 15.5px; color: #334155; line-height: 1.6; margin-top: 10px;">
+            Plug Lemma 1 into $\mel{\phi(\boldsymbol{\alpha})}{P}{\phi(\boldsymbol{\alpha})}$:
+            $$ f(\boldsymbol{\alpha})=\!\!\sum_{k,k',\vec l,\vec l'}\! \overline{a_{\vec l,k}}\,a_{\vec l',k'}\,P_{kk'}\, e^{\,i\pi\boldsymbol{\alpha}\cdot(\vec l'-\vec l)}. $$
+            Group terms by $\vec l:=\vec l'-\vec l$:<br>
+            $\;\vec l\in[-L,L]^{d}-[-L,L]^{d}=\mathcal{L}$,<br>
+            $\,b_{\vec l}=\sum_{k,k'}\sum_{\vec l'-\vec l''=\vec l} \overline{a_{\vec l'',k}}\,a_{\vec l',k'}\,P_{kk'}$.
+          </p>
+        </div>
+
+        <div>
+          <p class="section-label">Structural takeaways</p>
+          <ul class="custom-list" style="margin-top: 10px;">
+            <li>Finite integer lattice $\mathcal{L}=[-2L,2L]^{d}$, $\vert \mathcal{L}\vert =(4L+1)^{d}$.</li>
+            <li>Unknowns appear <em>only</em> in phases $e^{i\pi\boldsymbol{\alpha}\cdot\vec l}$: structure and parameters decouple.</li>
+            <li>Learning $f$ $\Leftrightarrow$ learning $\boldsymbol{b}\in\mathbb{C}^{m}$ $\Rightarrow$ linear regression once $\boldsymbol{b}$ is exposed.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="slide-footer">
+      <div class="footer-left">
+        <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Kernel Method</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+      </div>
+      <div class="footer-right">
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="ipp_logo.png" alt="IPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="icepp_logo.png" alt="ICEPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;">
+          <img src="utokyo_logo.png" alt="University of Tokyo" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <span class="slide-num" style="margin-left:8px;">06 / 12</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== Slide 7 ==================== -->
+  <section class="slide">
+    <div class="accent-bar"></div>
+
+    <div class="slide-header">
+      <h2 class="slide-title">The PQC Concept Class — Definition 3</h2>
+      <div class="title-rule"></div>
+    </div>
+
+    <div class="slide-content">
+      
+      <div class="math-block def" style="margin-top: 12px; margin-bottom: 24px;">
+        <p class="math-block-title">Definition 3 — PQC-based functions concept class (Barthe et al.)</p>
+        <div class="math-block-body theorem-text">
+          Let $U(\boldsymbol{x},\boldsymbol{\alpha})$ be a Pauli-encoded circuit on $n$ qubits in which $\boldsymbol{x}\in\{0,1\}^{N}$ bit-encodes the <em>fixed</em> sub-circuit (lattice mask, geometry, ...) and $\boldsymbol{\alpha}\in[0,1]^{d_{n}}$, $d_{n}=f(n)$, are the unknown shared parameters. For an observable $O$,
+          $$ \mathcal{C}^{\mathsf{PQC}}_{n,f}\;=\; \Bigl\{\,\boldsymbol{x}\,\mapsto\,\mel{0}{U^{\dagger}(\boldsymbol{x},\boldsymbol{\alpha})\,O\,U(\boldsymbol{x},\boldsymbol{\alpha})}{0} \;:\;\boldsymbol{\alpha}\in[0,1]^{d_{n}}\Bigr\}. $$
+          <span style="font-style: normal; font-weight: 600; color: #0A3D62; display: inline-block; margin-top: 4px;">Two distinct scaling regimes:</span> $f(n)=\log n\,\Rightarrow\,\mathcal{C}^{\mathsf{PQC}}_{\log}$ (PAC-learnable); $\quad f(n)=\mathrm{poly}(n)\,\Rightarrow\,\mathcal{C}^{\mathsf{PQC}}_{\mathrm{poly}}$ (Computationally hard).
+        </div>
+      </div>
+
+      <div class="math-block cor" style="margin-bottom: 32px;">
+        <p class="math-block-title">Core Identity (Eq. 8 with <span style="text-transform:none;">$x$</span> tracked)</p>
+        <div class="math-block-body theorem-text">
+          Sandwich $O$ and group by frequency as on Slide 06, explicitly tracking the $\boldsymbol{x}$-dependence of the amplitudes $a_{\vec l,k}(\boldsymbol{x})$:
+          $$ f_{\boldsymbol{\alpha}}(\boldsymbol{x})\;=\; \sum_{\vec l\in\mathcal{L}}\;b_{\vec l}(\boldsymbol{x})\; e^{\,i\pi\,\boldsymbol{\alpha}\cdot\vec l}, \qquad \mathcal{L}=[-2L,+2L]^{d_{n}},\;|\mathcal{L}|=m. $$
+          Here, $\boldsymbol{b}(\boldsymbol{x})=(b_{\vec l}(\boldsymbol{x}))_{\vec l\in\mathcal{L}}\in\mathbb{C}^{m}$ is an $\boldsymbol{x}$-dependent feature vector; the frequency phases remain entirely $\boldsymbol{x}$-independent.
+        </div>
+      </div>
+
+      <div style="background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 8px; padding: 20px 24px; margin-top: auto; box-shadow: 0 4px 12px rgba(22, 101, 52, 0.05);">
+        <p style="font-size: 15.5px; color: #14532D; line-height: 1.6; margin: 0;">
+          <strong style="color: #065F46;">$\Rightarrow$ Strategic Consequence:</strong> The PAC dataset $\{(\boldsymbol{x}_t,f_{\boldsymbol{\alpha}}(\boldsymbol{x}_t))\}$ inherently maps to the structure of a generalized linear model within the latent feature space $\boldsymbol{b}(\boldsymbol{x}_t)$.
+        </p>
+      </div>
+    </div>
+
+    <div class="slide-footer">
+      <div class="footer-left">
+        <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Kernel Method</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+      </div>
+      <div class="footer-right">
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="ipp_logo.png" alt="IPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="icepp_logo.png" alt="ICEPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;">
+          <img src="utokyo_logo.png" alt="University of Tokyo" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <span class="slide-num" style="margin-left:8px;">07 / 12</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== Slide 8 ==================== -->
+  <section class="slide">
+    <div class="accent-bar"></div>
+
+    <div class="slide-header">
+      <h2 class="slide-title">Learning Reduction — Features and Phases Decouple</h2>
+      <div class="title-rule"></div>
+    </div>
+
+    <div class="slide-content">
+      <p class="base-text">
+        The core identity is a complex <em>linear</em> model across two dual feature maps — one strictly extracted from the input data, and one carrying the unknown parameter values.
+      </p>
+
+      <div class="math-block cor" style="margin-bottom: 24px;">
+        <p class="math-block-title">Bilinear Factorization</p>
+        <div class="math-block-body">
+          $$ f_{\boldsymbol{\alpha}}(\boldsymbol{x})\;=\;\boldsymbol{b}(\boldsymbol{x})\,\cdot\,\boldsymbol{w}(\boldsymbol{\alpha}), \qquad \boldsymbol{w}(\boldsymbol{\alpha})=\bigl(e^{\,i\pi\,\vec l\cdot\boldsymbol{\alpha}}\bigr)_{\vec l\in\mathcal{L}}\! \in\mathbb{C}^{m},\;\; \boldsymbol{b}(\boldsymbol{x})\in\mathbb{C}^{m}. $$
+          
+          <div style="display: grid; grid-template-columns: 80px 1fr; gap: 12px; margin-top: 16px; font-size: 15px;">
+            <div style="font-weight: 700;">$\boldsymbol{b}(\boldsymbol{x})$ :</div>
+            <div><em>Known</em> per-sample feature vector, explicitly <em>computable</em> by Algorithm $\mathcal{A}$ (Sec. III).</div>
+            
+            <div style="font-weight: 700;">$\boldsymbol{w}(\boldsymbol{\alpha})$ :</div>
+            <div><em>Unknown</em> but perfectly $\boldsymbol{x}$-independent. It lies constrained on the $m$-torus $\bigl\{\,e^{i\pi\vec l\cdot\boldsymbol{\alpha}}\,\bigr\}_{\vec l}$, strictly satisfying $\|\boldsymbol{w}\|_\infty=1$ and $\|\boldsymbol{w}\|_1\le m$.</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px;">
+        <!-- Left: Pipeline -->
+        <div class="feature-card">
+          <p class="feature-card-title">Quantum–Classical Pipeline</p>
+          <ol class="custom-list-num">
+            <li><strong style="color: #0A3D62;">Quantum, per sample:</strong> Run Algorithm $\mathcal{A}$ on $U(\boldsymbol{x}_t,\cdot)$ via Hadamard tests to retrieve the empirical feature vector $\hat{\boldsymbol{b}}(\boldsymbol{x}_t)$ up to additive error $\varepsilon_b$.</li>
+            <li><strong style="color: #0A3D62;">Classical, once:</strong> Execute the regularized linear regression:
+              $$ \hat{\boldsymbol{w}}\,=\,\arg\min_{\|\boldsymbol{w}\|_1\le\Lambda_1} \bigl\|\,\boldsymbol{y}-\hat B\,\boldsymbol{w}\bigr\|_2^{2}, \;\;\hat B_{t,\vec l}=\hat b_{\vec l}(\boldsymbol{x}_t). $$
+            </li>
+            <li><strong style="color: #0A3D62;">Inference:</strong> $h(\boldsymbol{x})=\hat{\boldsymbol{b}}(\boldsymbol{x})\cdot\hat{\boldsymbol{w}}$.</li>
+          </ol>
+        </div>
+
+        <!-- Right: Takeaways -->
+        <div class="alert-block">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;">
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+          </svg>
+          <div>
+            <p class="alert-block-title">Why this reduction is the whole game</p>
+            <ul class="custom-list" style="color: white; font-size: 15px; margin-top: 8px;">
+              <li style="color: white;"><strong>Complete Elimination:</strong> The classical regressor never touches or fits the physical couplings $\boldsymbol{\alpha}$.</li>
+              <li style="color: white;"><strong>Sample Complexity:</strong> Controlled entirely by the $\ell_1$-norm bound $\|\boldsymbol{w}\|_1$ (via LASSO, Theorem 6), and critically <em>not</em> by the exponential ambient dimension $|\mathcal{L}|$.</li>
+              <li style="color: white;"><strong style="color: #38BDF8;">The New Frontier:</strong> The hard part is now purely quantum—efficiently extracting $\boldsymbol{b}(\boldsymbol{x})$ via Algorithm $\mathcal{A}$.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="slide-footer">
+      <div class="footer-left">
+        <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Kernel Method</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+      </div>
+      <div class="footer-right">
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="ipp_logo.png" alt="IPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="icepp_logo.png" alt="ICEPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;">
+          <img src="utokyo_logo.png" alt="University of Tokyo" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <span class="slide-num" style="margin-left:8px;">08 / 12</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== Slide 9 ==================== -->
+  <section class="slide">
+    <div class="accent-bar"></div>
+
+    <div class="slide-header">
+      <h2 class="slide-title">Algorithm $A$ — Architecture and Register Design</h2>
+      <div class="title-rule"></div>
+    </div>
+
+    <div class="slide-content">
+      
+      <div class="math-block def" style="margin-bottom: 24px;">
+        <p class="math-block-title">Objective (Theorem 1, Sec. III of Barthe et al.)</p>
+        <div class="math-block-body theorem-text">
+          Compile any Pauli-encoded $U(\boldsymbol{x},\boldsymbol{\alpha})$ into a <em>parameter-free</em> circuit $A(U)$ on a larger Hilbert space such that
+          $$ A(U)\,\ket{0}_{f}\ket{0}_{a}\ket{0}_{c}\;=\; \sum_{k=1}^{2^{n}}\;\sum_{\vec l\in[-L,L]^{d}}\! a_{\vec l,k}(\boldsymbol{x})\; \ket{\vec l}_{f}\,\ket{0}_{a}\,\ket{k}_{c}. $$
+          Each Fourier index $\vec l$ is now a <em>physical, addressable</em> basis state — we can post-select or Hadamard-test on it.
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 0.50fr 0.48fr; gap: 2%; align-items: start;">
+        <!-- Left Column -->
+        <div>
+          <p class="section-label" style="color: #0A3D62; font-size: 15.5px; margin-bottom: 12px; margin-top: 0;">
+            Three registers $\bigl[\,n_T=n+1+\sum_s n_s\,\bigr]$
+          </p>
+          
+          <div style="display: flex; flex-direction: column; gap: 8px; font-size: 15.5px; color: #334155; line-height: 1.6;">
+            <p style="margin:0;">
+              <span style="font-weight:700; color:#0A84FF;">$c$:</span>
+              <span> circuit register, $n$ qubits.</span>
+            </p>
+            <p style="margin:0;">
+              <span style="font-weight:700; color:#0A84FF;">$a$:</span>
+              <span> parity ancilla, 1 qubit.</span>
+            </p>
+            <p style="margin:0;">
+              <span style="font-weight:700; color:#0A84FF; white-space:nowrap;">$f=f_1\!\cdots f_d$:</span>
+              <span> frequency register; $n_s=1+\lceil 2\log s\rceil$ qubits per dimension, with circular-boundary increment / decrement gates $V_+,V_-=V_+^{\dagger}$.</span>
+            </p>
+          </div>
+          
+          <p style="font-size: 15.5px; color: #334155; line-height: 1.6; margin: 20px 0 0 0; padding: 16px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;">
+            <strong style="color: #0A3D62;">Resource counts (Theorem 1).</strong> Total $n'=n+d\lceil\log L\rceil+1$ qubits, $L'=N_f+L(2n+d\lceil\log L\rceil)$ gates; <em>all</em> $\boldsymbol{\alpha}$-independent.
+          </p>
+        </div>
+
+        <!-- Right Column -->
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 4px;">
+          <img src="algorithm_A_circuit.png" alt="Algorithm A Circuit" style="width: 100%; border: 1px solid #E2E8F0; border-radius: 6px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
+          <p style="font-size: 12px; color: #64748B; font-style: italic; text-align: center; line-height: 1.5; margin: 0; padding: 0 10px;">
+            Left: a 2-qubit Pauli-encoded $U(\boldsymbol{x})$. Right: the compiled $A(U)$. The $V_\pm$ blocks per encoding gate stand in for the $D{\cdot}G{\cdot}D$ construction (next slide). <br><em>Figure 1 of Barthe et al., 2025.</em>
+          </p>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="slide-footer">
+      <div class="footer-left">
+        <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Kernel Method</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+      </div>
+      <div class="footer-right">
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="ipp_logo.png" alt="IPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="icepp_logo.png" alt="ICEPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;">
+          <img src="utokyo_logo.png" alt="University of Tokyo" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <span class="slide-num" style="margin-left:8px;">09 / 12</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== Slide 10 ==================== -->
+  <section class="slide">
+    <div class="accent-bar"></div>
+
+    <div class="slide-header">
+      <h2 class="slide-title">Algorithm $A$ — the $D \cdot G \cdot D$ transformation</h2>
+      <div class="title-rule"></div>
+    </div>
+
+    <div class="slide-content">
+      <p class="base-text" style="margin-bottom: 24px;">
+        <strong style="color: #0A3D62;">Setup.</strong> WLOG every encoding gate is $V_l(\boldsymbol{\alpha})=\exp\!\bigl(i\pi\alpha_{s_l}P_l\bigr)$ with $P_l=\prod_{k:b_{l,k}=1}Z_k$ (any $X,Y$ gates are absorbed into the surrounding fixed gates). Algorithm $A$ replaces it with a completely decoupled construction:
+      </p>
+
+      <div style="display: flex; justify-content: center; margin-bottom: 28px;">
+        <div style="border: 2px solid #0A84FF; border-radius: 8px; padding: 12px 32px; background: #F0F9FF; box-shadow: 0 4px 12px rgba(10, 132, 255, 0.1);">
+          <span style="font-size: 20px; font-weight: 600; color: #0A3D62;">
+            $$V_l(\boldsymbol{\alpha})\;\;\longmapsto\;\; D(b_l)\cdot G(s_l)\cdot D(b_l)$$
+          </span>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 0.54fr 0.44fr; gap: 2%; align-items: start;">
+        <!-- Left Column -->
+        <div>
+          <div style="display: grid; grid-template-columns: min-content 1fr; gap: 12px 16px; margin-bottom: 20px; font-size: 15.5px; color: #334155; line-height: 1.6;">
+            <div style="font-weight: 700; color: #0A84FF; white-space: nowrap;">$D(b_l)$</div>
+            <div>CNOT cascade $\prod_{k:b_{l,k}=1}\!\mathrm{CNOT}^{(c_k\to a)}$, writes the parity $\,p_l(k)=\bigoplus_{j:b_{l,j}=1}\!k_j\in\{0,1\}$ onto $a$.</div>
+            
+            <div style="font-weight: 700; color: #0A84FF; white-space: nowrap;">$G(s_l)$</div>
+            <div>parity-controlled increment / decrement of $f_{s_l}$: apply $V_+$ when $p_l=1$, apply $V_-$ when $p_l=0$.</div>
+            
+            <div style="font-weight: 700; color: #0A84FF; white-space: nowrap;">$D(b_l)$</div>
+            <div>second CNOT cascade uncomputes $a$ back to $\ket{0}$ (since $D^{2}=I$), making the ancilla reusable for the next gate.</div>
+          </div>
+
+          <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-left: 4.5px solid #10B981; border-radius: 8px; padding: 16px 20px; margin-top: 10px;">
+            <p style="font-size: 15.5px; font-weight: 700; color: #059669; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.05em;">Net effect</p>
+            <p style="font-size: 15.5px; color: #334155; line-height: 1.6; margin: 0;">
+              The physical phase $e^{i\pi\alpha_{s_l}\sigma_l(k)}$ of $V_l(\boldsymbol{\alpha})$ becomes a discrete additive shift of the auxiliary register $f_{s_l}$:
+              $$ \ket{l}_f\ket{0}_a\ket{k}_c\;\longmapsto\; \ket{l+e_{s_l}\sigma_l(k)}_f\ket{0}_a\ket{k}_c,\quad \sigma_l=(-1)^{1\oplus p_l}. $$
+              Accumulated over the $L$ parameterized gates, this builds out the frequency grid $\vec l$ defined in Lemma 1.
+            </p>
+          </div>
+        </div>
+
+        <!-- Right Column (Circuit diagram via SVG + HTML labels) -->
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 8px;">
+          <div style="position: relative; width: 100%; max-width: 420px; aspect-ratio: 420/280; background: #ffffff; border: 1px solid #E2E8F0; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); margin-bottom: 12px;">
+            <svg viewBox="0 20 420 280" style="width: 100%; height: 100%;">
+              <!-- Wires -->
+              <line x1="50" y1="50" x2="400" y2="50" stroke="#0A3D62" stroke-width="1.5" />
+              <line x1="50" y1="110" x2="400" y2="110" stroke="#0A3D62" stroke-width="1.5" />
+              <line x1="50" y1="170" x2="400" y2="170" stroke="#0A3D62" stroke-width="1.5" />
+              <line x1="50" y1="230" x2="400" y2="230" stroke="#0A3D62" stroke-width="1.5" />
+        
+              <!-- First CNOT (c_k1 to a) -->
+              <line x1="90" y1="110" x2="90" y2="170" stroke="#0A84FF" stroke-width="2" />
+              <circle cx="90" cy="170" r="4.5" fill="#0A84FF" />
+              <circle cx="90" cy="110" r="9" fill="#fff" stroke="#0A84FF" stroke-width="2" />
+              <line x1="90" y1="101" x2="90" y2="119" stroke="#0A84FF" stroke-width="2" />
+              <line x1="81" y1="110" x2="99" y2="110" stroke="#0A84FF" stroke-width="2" />
+        
+              <!-- Second CNOT (c_k2 to a) -->
+              <line x1="140" y1="110" x2="140" y2="230" stroke="#0A84FF" stroke-width="2" />
+              <circle cx="140" cy="230" r="4.5" fill="#0A84FF" />
+              <circle cx="140" cy="110" r="9" fill="#fff" stroke="#0A84FF" stroke-width="2" />
+              <line x1="140" y1="101" x2="140" y2="119" stroke="#0A84FF" stroke-width="2" />
+              <line x1="131" y1="110" x2="149" y2="110" stroke="#0A84FF" stroke-width="2" />
+        
+              <!-- Controlled V+ (a to f) -->
+              <line x1="210" y1="50" x2="210" y2="110" stroke="#10B981" stroke-width="2" />
+              <circle cx="210" cy="110" r="4.5" fill="#10B981" />
+              <rect x="185" y="32" width="50" height="36" rx="4" fill="#fff" stroke="#10B981" stroke-width="2" />
+              <text x="210" y="55" font-family="'Inter', sans-serif" font-size="14" fill="#10B981" text-anchor="middle" font-weight="700">V+</text>
+        
+              <!-- Anti-Controlled V- (a to f) -->
+              <line x1="280" y1="50" x2="280" y2="110" stroke="#DC2626" stroke-width="2" />
+              <circle cx="280" cy="110" r="4.5" fill="#fff" stroke="#DC2626" stroke-width="2" />
+              <rect x="255" y="32" width="50" height="36" rx="4" fill="#fff" stroke="#DC2626" stroke-width="2" />
+              <text x="280" y="55" font-family="'Inter', sans-serif" font-size="14" fill="#DC2626" text-anchor="middle" font-weight="700">V−</text>
+        
+              <!-- Third CNOT (c_k1 to a) -->
+              <line x1="350" y1="110" x2="350" y2="170" stroke="#0A84FF" stroke-width="2" />
+              <circle cx="350" cy="170" r="4.5" fill="#0A84FF" />
+              <circle cx="350" cy="110" r="9" fill="#fff" stroke="#0A84FF" stroke-width="2" />
+              <line x1="350" y1="101" x2="350" y2="119" stroke="#0A84FF" stroke-width="2" />
+              <line x1="341" y1="110" x2="359" y2="110" stroke="#0A84FF" stroke-width="2" />
+        
+              <!-- Fourth CNOT (c_k2 to a) -->
+              <line x1="400" y1="110" x2="400" y2="230" stroke="#0A84FF" stroke-width="2" />
+              <circle cx="400" cy="230" r="4.5" fill="#0A84FF" />
+              <circle cx="400" cy="110" r="9" fill="#fff" stroke="#0A84FF" stroke-width="2" />
+              <line x1="400" y1="101" x2="400" y2="119" stroke="#0A84FF" stroke-width="2" />
+              <line x1="391" y1="110" x2="409" y2="110" stroke="#0A84FF" stroke-width="2" />
+        
+              <!-- Brace -->
+               <g transform="translate(-20,-5)"> 
+                <path d="M 70 250 Q 70 260 80 260 L 235 260 Q 245 260 245 270 Q 245 260 255 260 L 410 260 Q 420 260 420 250" fill="none" stroke="#64748B" stroke-width="1.5" />
+               </g>
+              
+            </svg>
+
+            <!-- HTML Math Labels perfectly positioned over the SVG -->
+            <div style="position: absolute; left: 10px; top: 14%; width: 35px; text-align: right; font-size: 14px; color: #0A3D62; font-weight: 600;">$f_{s_l}$</div>
+            <div style="position: absolute; left: 0px; top: 35%; width: 35px; text-align: right; font-size: 14px; color: #0A3D62; font-weight: 600;">$a$</div>
+            <div style="position: absolute; left: 8px; top: 56%; width: 35px; text-align: right; font-size: 14px; color: #0A3D62; font-weight: 600;">$c_{k_1}$</div>
+            <div style="position: absolute; left: 8px; top: 77%; width: 35px; text-align: right; font-size: 14px; color: #0A3D62; font-weight: 600;">$c_{k_2}$</div>
+            <div style="position: absolute; left: 50px; right: 0; bottom: 5px; text-align: center; font-size: 14.5px; color: #64748B; font-weight: 600;">$D(b_l) \cdot G(s_l) \cdot D(b_l)$</div>
+          </div>
+          
+          <p style="font-size: 12.5px; color: #64748B; font-style: italic; text-align: center; line-height: 1.5; margin: 0; padding: 0 10px;">
+            One conceptual block; assuming two relevant $c$-qubits where $b_{l,k_1}\!=\!b_{l,k_2}\!=\!1$. The two $D$ cascades compute the parity, sandwich $G$, and reset the ancilla $a$.
+          </p>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="slide-footer">
+      <div class="footer-left">
+        <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Kernel Method</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+      </div>
+      <div class="footer-right">
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="ipp_logo.png" alt="IPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="icepp_logo.png" alt="ICEPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;">
+          <img src="utokyo_logo.png" alt="University of Tokyo" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <span class="slide-num" style="margin-left:8px;">10 / 12</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== Slide 11 ==================== -->
+  <section class="slide">
+    <div class="accent-bar"></div>
+
+    <div class="slide-header">
+      <h2 class="slide-title">Algorithm $A$ — Correctness by Induction (Theorem 1)</h2>
+      <div class="title-rule"></div>
+    </div>
+
+    <div class="slide-content">
+      
+      <div class="math-block def" style="margin-bottom: 24px;">
+        <p class="math-block-title">Theorem 1 (Barthe et al., Sec. III)</p>
+        <div class="math-block-body theorem-text">
+          For every Pauli-encoded $U$, the parameter-free circuit $A(U)$ prepares
+          $$ \ket{\phi'}\;=\;A(U)\ket{0}\;=\; \sum_{k=1}^{2^n}\;\sum_{\vec l\in[-L,L]^d}\!a_{\vec l,k}(\boldsymbol{x})\, \ket{\vec l}_{f}\ket{0}_{a}\ket{k}_{c} $$
+          in $\mathrm{poly}(n,d)$ qubits/gates, with <em>no knowledge of $\boldsymbol{\alpha}$</em>. Equivalently, $A$ physically tags the Fourier indices of Lemma 1.
+        </div>
+      </div>
+
+      <p class="base-text" style="margin-bottom: 16px;">
+        <strong style="color: #0A3D62;">Proof.</strong> Induction on the number of processed gates, with the invariant
+        $\;\ket{\phi'_t}=\sum_{k,\vec l}\,a^{(t)}_{\vec l,k}\,\ket{\vec l}_f\ket{0}_a\ket{k}_c$,
+        where $a^{(t)}_{\vec l,k}$ are the exact Lemma 1 amplitudes of the truncated circuit $U_{\le t}$.
+      </p>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 24px;">
+        
+        <div style="background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; padding: 14px 16px; box-shadow: 0 2px 6px rgba(0,0,0,0.02);">
+          <p style="font-size: 13px; font-weight: 700; color: #0A84FF; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.05em;">1. Base Case</p>
+          <p style="font-size: 14.5px; color: #334155; line-height: 1.5; margin: 0;">
+            $A(I)\ket{0}=\ket{0}_f\ket{0}_a\ket{0}_c$, which perfectly matches Lemma 1 for the trivial circuit $U=I$. <span style="color: #10B981; font-weight: bold;">✓</span>
+          </p>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; padding: 14px 16px; box-shadow: 0 2px 6px rgba(0,0,0,0.02);">
+          <p style="font-size: 13px; font-weight: 700; color: #0A84FF; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.05em;">2. Fixed gate $U^{(c)}$</p>
+          <p style="font-size: 14.5px; color: #334155; line-height: 1.5; margin: 0;">
+            Lifted as $I^{(f)}\!\otimes\!I^{(a)}\!\otimes\!U^{(c)}$. Therefore $a^{(t+1)}_{\vec l,k}=\sum_{k'}\!U_{kk'}a^{(t)}_{\vec l,k'}$, leaving frequencies completely untouched. <span style="color: #10B981; font-weight: bold;">✓</span>
+          </p>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; padding: 14px 16px; box-shadow: 0 2px 6px rgba(0,0,0,0.02);">
+          <p style="font-size: 13px; font-weight: 700; color: #0A84FF; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.05em;">3. Encoding gate</p>
+          <p style="font-size: 14.5px; color: #334155; line-height: 1.5; margin: 0;">
+            $D\!\cdot\!G\!\cdot\!D$ systematically maps $a^{(t)}_{\vec l,k}\!\to\!a^{(t+1)}_{\vec l+e_{s_l}\sigma_l(k),\,k}$, flawlessly matching the phase $e^{i\pi\alpha_{s_l}P_l}$ on $\sum a^{(t)}\!e^{i\pi\boldsymbol{\alpha}\cdot\vec l}\ket k$. <span style="color: #10B981; font-weight: bold;">✓</span>
+          </p>
+        </div>
+
+      </div>
+
+      <div class="alert-block">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;">
+          <circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>
+        </svg>
+        <div>
+          <p class="alert-block-title">Why this matters</p>
+          <p class="alert-block-body">
+            $A$ is <em>deterministic</em> and <em>universal</em> (across any Pauli-encoded $U$) and amplitude-encodes Lemma 1's spectrum with only polynomial overhead. Sandwiching $A$ into a standard Hadamard test on $\ket{\vec l}_{f}$ directly yields each coefficient $b_{\vec l}(\boldsymbol{x})$ up to additive error (Corollaries 1 & 2, next slide).
+          </p>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="slide-footer">
+      <div class="footer-left">
+        <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Kernel Method</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation</span></div>
+        <span class="r-arrow">›</span>
+        <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+      </div>
+      <div class="footer-right">
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="ipp_logo.png" alt="IPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+          <img src="icepp_logo.png" alt="ICEPP" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <div style="border-radius:6px;padding:0;display:flex;align-items:center;">
+          <img src="utokyo_logo.png" alt="University of Tokyo" style="height:27px;width:auto;object-fit:contain;">
+        </div>
+        <span class="slide-num" style="margin-left:8px;">11 / 12</span>
+      </div>
+    </div>
+  </section>
+
+<!-- ==================== Slide 12 (NEW) ==================== -->
+<section class="slide">
+  <div class="accent-bar"></div>
+
+  <div class="slide-header">
+    <h2 class="slide-title">Amplitude-Encoding the Coefficients (Corollary 1)</h2>
+    <div class="title-rule"></div>
+  </div>
+
+  <div class="slide-content">
+    <p class="base-text" style="margin-bottom: 24px;">
+      Theorem 1 lifts a circuit to its <em>state-level</em> Fourier expansion.
+      Sandwiching $A(U)$ around an observable $P$ lifts that further to the
+      <em>expectation-value</em> Fourier expansion — establishing a direct
+      amplitude encoding of $\boldsymbol{b}(\boldsymbol{x})$ directly onto the
+      frequency register.
+    </p>
+
+    <div class="math-block cor" style="margin-bottom: 28px;">
+      <p class="math-block-title">Corollary 1 — Expectation-value Fourier state (Eq. 9)</p>
+      <div class="math-block-body theorem-text">
+        Defining the compound circuit
+        $\mathcal{A}(U,P)\mathrel{:=}\bigl(\bra{0}_a\bra{0}_c\bigr)\,\mathcal{A}(U)^{\dagger}\,P\,\mathcal{A}(U)$,
+        $$
+        \mathcal{A}(U,P)\;\ket{0}_f\ket{0}_a\ket{0}_c
+        \;=\;
+        \frac{1}{\|\boldsymbol{b}(\boldsymbol{x})\|_2}
+        \!\sum_{\vec l\in\mathcal{L}}\!
+        b_{\vec l}(\boldsymbol{x})\;
+        \ket{\vec l}_f
+        \;+\;
+        \ket{\dots}_f\,\ket{0_\perp}_{ac}.
+        $$
+        Post-selection on $\ket{0}_a\!\ket{0}_c$ succeeds with probability
+        $p^\star=\|\boldsymbol{b}(\boldsymbol{x})\|_2^{2}$; the surviving
+        $f$-register strictly amplitude-encodes the Fourier coefficients of
+        $f_{\boldsymbol{\alpha}}(\boldsymbol{x})
+        =\bra{0}U^{\dagger}(\boldsymbol{x},\boldsymbol{\alpha})\,P\,U(\boldsymbol{x},\boldsymbol{\alpha})\ket{0}$.
+      </div>
+    </div>
+
+    <!-- Circuit block -->
+    <div style="display:flex; flex-direction:column; align-items:center; margin-top:10px;">
+      <div style="
+        position: relative;
+        background:#ffffff;
+        border:1px solid #E2E8F0;
+        border-radius:8px;
+        padding:24px 40px;
+        box-shadow:0 4px 12px rgba(0,0,0,0.03);
+        width:560px;
+        height:180px;
+      ">
+
+        <!-- Pure SVG without LaTeX -->
+        <svg width="480" height="120" viewBox="0 0 480 120"
+             style="position:absolute; top:30px; left:40px;">
+
+          <!-- Wires -->
+          <line x1="50" y1="20" x2="430" y2="20" stroke="#0A3D62" stroke-width="1.5"/>
+          <line x1="50" y1="60" x2="430" y2="60" stroke="#0A3D62" stroke-width="1.5"/>
+          <line x1="50" y1="100" x2="430" y2="100" stroke="#0A3D62" stroke-width="1.5"/>
+
+          <!-- Boxes -->
+          <rect x="80" y="10" width="70" height="100" rx="4"
+                fill="#F0F9FF" stroke="#0A84FF" stroke-width="2"/>
+
+          <rect x="185" y="85" width="30" height="30" rx="4"
+                fill="#FEF2F2" stroke="#DC2626" stroke-width="2"/>
+
+          <rect x="250" y="10" width="80" height="100" rx="4"
+                fill="#F0F9FF" stroke="#0A84FF" stroke-width="2"/>
+
+          <rect x="360" y="45" width="55" height="70" rx="4"
+                fill="#F8FAFC" stroke="#64748B" stroke-width="2"/>
+
+
+          <!-- Plain text only -->
+          <text x="200" y="105"
+                font-family="Inter"
+                font-size="16"
+                fill="#DC2626"
+                text-anchor="middle"
+                font-weight="700">P</text>
+        </svg>
+
+        <!-- HTML Math overlays -->
+        <div style="position:absolute; left:18px; top:42px; font-size:16px;">
+          $\ket{0}_f$
+        </div>
+
+        <div style="position:absolute; left:18px; top:82px; font-size:16px;">
+          $\ket{0}_a$
+        </div>
+
+        <div style="position:absolute; left:18px; top:122px; font-size:16px;">
+          $\ket{0}_c$
+        </div>
+
+        <div style="position:absolute; left:108px; top:88px; font-size:15px; font-weight:700;">
+          $\mathcal{A}(U)$
+        </div>
+
+        <div style="position:absolute; left:283px; top:88px; font-size:15px; font-weight:700;">
+          $\mathcal{A}(U)^\dagger$
+        </div>
+
+        <div style="position:absolute; left:410px; top:100px; font-size:13px;">
+          \ketbra{0}{0}
+        </div>
+
+
+        <div style="position:absolute; left:490px; top:88px; font-size:15px; font-weight:700;">
+          $=\mathcal{A}(U,P)$
+        </div>
+      </div>
+
+      <p style="
+        font-size:12.5px;
+        color:#64748B;
+        font-style:italic;
+        margin-top:12px;
+        text-align:center;
+        line-height:1.5;
+      ">
+        Compound circuit $\mathcal{A}(U,P)$; projecting
+        $\ket{0}\!\bra{0}$ on the $a,c$ registers leaves the target vector
+        $\boldsymbol{b}(\boldsymbol{x})$ strictly amplitude-encoded on the
+        frequency register $f$.<br>
+        <em>Redrawn from Fig. 2, Barthe et al. (2025).</em>
+      </p>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <div class="footer-left">
+      <div class="roadmap-pill"><span class="pl">PART I</span><span class="pd">PAC Framework</span></div>
+      <span class="r-arrow">›</span>
+      <div class="roadmap-pill"><span class="pl">PART II</span><span class="pd">Algorithm Design</span></div>
+      <span class="r-arrow">›</span>
+      <div class="roadmap-pill"><span class="pl">PART III</span><span class="pd">Kernel Method</span></div>
+      <span class="r-arrow">›</span>
+      <div class="roadmap-pill"><span class="pl">PART IV</span><span class="pd">Implementation</span></div>
+      <span class="r-arrow">›</span>
+      <div class="roadmap-pill"><span class="pl">PART V</span><span class="pd">Numerical Results</span></div>
+    </div>
+
+    <div class="footer-right">
+      <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+        <img src="ipp_logo.png" alt="IPP" style="height:27px;width:auto;object-fit:contain;">
+      </div>
+      <div style="border-radius:6px;padding:0;display:flex;align-items:center;margin-right:-2px;">
+        <img src="icepp_logo.png" alt="ICEPP" style="height:27px;width:auto;object-fit:contain;">
+      </div>
+      <div style="border-radius:6px;padding:0;display:flex;align-items:center;">
+        <img src="utokyo_logo.png" alt="University of Tokyo" style="height:27px;width:auto;object-fit:contain;">
+      </div>
+      <span class="slide-num" style="margin-left:8px;">12 / 12</span>
+    </div>
+  </div>
+</section>
+  
+</body>
+</html>
