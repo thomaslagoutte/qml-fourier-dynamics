@@ -112,70 +112,43 @@ SHOTS = 5000
 trotter_pts = np.empty(len(T_VALS))
 pac_pts     = np.empty(len(T_VALS))
 
-print("\nRunning hardware-mode validation (LASSO)…\n")
+# Define the union ONCE outside the loop
+X_all = list(X_train) + [test_state]
+N_train = len(X_train)
 
+print("\nRunning hardware-mode validation (LASSO)…\n")
 for idx, tau in enumerate(T_VALS):
     t0 = time.time()
-
-    # --------------------------------------------------------------
-    # 5a) Build Experiment (LASSO)
-    # --------------------------------------------------------------
+    
+    # Instantiate the experiment
     exp = Experiment(
-        model=model,
-        observable=obs,
-        method="lasso",                 # ✅ switched here
-        execution_mode="hardware",
-        sampler=sampler,
-        shots=SHOTS,
-        tau=float(tau),
-        r_steps=R_STEPS,
-        trotter_order=1,
-        lasso_alpha=LASSO_ALPHA,
-        seed=SEED
+        model=model, observable=obs, method="lasso",
+        execution_mode="hardware", sampler=sampler, shots=SHOTS,
+        tau=float(tau), r_steps=R_STEPS, trotter_order=1,
+        lasso_alpha=LASSO_ALPHA, seed=SEED
     )
-
-    # --------------------------------------------------------------
-    # 5b) Training labels
-    # --------------------------------------------------------------
-    y_train = exp.compute_trotter_labels(
-        X_train, alpha_star, float(tau), R_STEPS
-    )
-
-    # --------------------------------------------------------------
-    # 5c) Feature extraction (train)
-    # --------------------------------------------------------------
-    B_train = exp.engine.extract(
-        X_train, float(tau), R_STEPS, obs
-    )
-
+    
+    # MEGA-BATCH: One transpile + one GPU pass for ALL graphs simultaneously
+    B_all = exp.engine.extract(X_all, float(tau), R_STEPS, obs)
+    
+    # Split the features back into train and test sets
+    B_train = B_all[:N_train]
+    B_test = B_all[N_train:]
+    
+    # Train and Predict
+    y_train = exp.compute_trotter_labels(X_train, alpha_star, float(tau), R_STEPS)
     exp.learner.fit(B_train, y_train)
-
-    # --------------------------------------------------------------
-    # 5d) Feature extraction (test)
-    # --------------------------------------------------------------
-    B_test = exp.engine.extract(
-        [test_state], float(tau), R_STEPS, obs
-    )
-
     pac_pts[idx] = float(exp.learner.predict(B_test)[0])
-
-    # --------------------------------------------------------------
-    # 5e) Exact Trotter reference
-    # --------------------------------------------------------------
+    
+    # Exact Trotter reference
     trotter_pts[idx] = float(
-        exp.compute_trotter_labels(
-            [test_state], alpha_star, float(tau), R_STEPS
-        )[0]
+        exp.compute_trotter_labels([test_state], alpha_star, float(tau), R_STEPS)[0]
     )
-
-    # --------------------------------------------------------------
-    # 5f) Logging
-    # --------------------------------------------------------------
-    print(
-        f"t={tau:5.2f} | Exact: {exact_vals[idx]:+.4f} | "
-        f"Trotter: {trotter_pts[idx]:+.4f} | LASSO: {pac_pts[idx]:+.4f} | "
-        f"Time: {time.time() - t0:.1f}s"
-    )
+    
+    # Logging
+    print(f"t={tau:5.2f} | Exact: {exact_vals[idx]:+.4f} | "
+          f"Trotter: {trotter_pts[idx]:+.4f} | LASSO: {pac_pts[idx]:+.4f} | "
+          f"Time: {time.time() - t0:.1f}s")
 
 # ----------------------------------------------------------------------
 # 6. Metrics
