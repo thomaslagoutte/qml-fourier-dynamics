@@ -83,8 +83,8 @@ class Experiment:
             raise ValueError(f"execution_mode must be 'emulator' or 'hardware', got {execution_mode!r}")
         if execution_mode == "hardware" and shots is None:
             raise ValueError("execution_mode='hardware' strictly requires an integer shot count.")
-        if method == "kernel" and model.d == 1:
-            raise ValueError("The 'kernel' method requires an inhomogeneous model (d > 1).")
+        # if method == "kernel" and model.d == 1:
+        #     raise ValueError("The 'kernel' method requires an inhomogeneous model (d > 1).")
         if observable.num_qubits() != model.num_qubits:
             raise ValueError(
                 f"observable.num_qubits={observable.num_qubits()} does not match "

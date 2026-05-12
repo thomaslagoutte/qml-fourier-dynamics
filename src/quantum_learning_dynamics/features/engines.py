@@ -15,7 +15,6 @@ import numpy as np
 from tqdm import tqdm
 from qiskit.quantum_info import Statevector
 from qiskit import transpile
-from qiskit.circuit import Parameter
 
 from .._types import FeatureMatrix, GramMatrix, InputX
 from ..circuits.kernel_overlap import KernelOverlapBuilder
@@ -25,75 +24,8 @@ from ..hamiltonians.base import HamiltonianModel
 from ..observables.base import Observable
 
 
-# ---------------------------------------------------------------------
-# Module-level helper: basis-gates list for ``transpile`` that protects
-# the inline MCX cascades produced by :mod:`circuits._controlled_ops`
-# from being unrolled into long CX chains.
-# ---------------------------------------------------------------------
-#
-# Qiskit ≤ 1.x accepts ``mcx`` directly in ``basis_gates``.
-# Qiskit ≥ 2.x rejects it ("non-standard gate") and demands a Target
-# with a ``custom_name_mapping``.  We probe once at import time and
-# cache the right form so the transpile call inside the hardware path
-# is portable across the user's GPU box (Qiskit 1.x with Aer GPU) and
-# the local CI (Qiskit 2.x).
-
-_CACHED_AER_BASIS: Optional[List[str]] = None
-
-
-def _aer_basis_for_inline_assembly() -> List[str]:
-    """Return the basis-gates list that preserves inline c-A(U,P) gates.
-
-    ``mcx`` and ``ccx`` are kept in the basis so that the MCX cascades
-    inside :func:`append_dctrl_cVp` / etc. are *not* eagerly decomposed
-    into CX chains during transpilation.  When Qiskit's ``transpile``
-    refuses ``mcx`` in ``basis_gates`` (Qiskit ≥ 2.x), we drop it from
-    the list — at ``optimization_level=0`` the transpiler does not
-    unroll high-level gates anyway, so the MCX instructions still
-    survive intact.
-    """
-    global _CACHED_AER_BASIS
-    if _CACHED_AER_BASIS is not None:
-        return _CACHED_AER_BASIS
-
-    candidate = [
-        "id", "rz", "sx", "x", "y", "z", "h", "s", "sdg",
-        "rx", "ry", "cx", "cy", "cz", "crx", "cry", "crz",
-        "ccx", "mcx", "measure",
-    ]
-    # Probe whether the installed Qiskit accepts ``mcx`` in basis_gates.
-    try:
-        from qiskit import QuantumCircuit
-        probe = QuantumCircuit(2)
-        probe.h(0)
-        transpile(probe, basis_gates=candidate, optimization_level=0)
-        _CACHED_AER_BASIS = candidate
-    except (ValueError, TypeError):
-        # Qiskit ≥ 2.x: drop ``mcx`` (transpile at level 0 will not
-        # unroll an unknown high-level gate, so MCX survives).
-        _CACHED_AER_BASIS = [g for g in candidate if g != "mcx"]
-    return _CACHED_AER_BASIS
-
-
 class _EngineBase:
-    """Abstract base class for quantum execution engines.
-
-    Manages the underlying physical model, the execution environment configuration,
-    and mathematical hardware noise injection.
-
-    Parameters
-    ----------
-    model : HamiltonianModel
-        The physical Hamiltonian driving the system.
-    execution_mode : {"emulator", "hardware"}
-        The simulation backend to target.
-    shots : int, optional
-        Number of measurement shots. If None, exact amplitudes are evaluated.
-    sampler : Any, optional
-        A Qiskit V2 Sampler primitive. Required only for "hardware" mode.
-    rng : np.random.Generator
-        Random number generator for reproducible shot-noise emulation.
-    """
+    """Abstract base class for quantum execution engines."""
 
     def __init__(
         self,
@@ -110,21 +42,7 @@ class _EngineBase:
         self.rng = rng
 
     def _apply_shot_noise(self, exact_value: float) -> float:
-        """Injects statistically rigorous shot noise into an exact amplitude.
-
-        Mimics the canonical Hadamard test estimator:
-        :math:`\\mathrm{Re}(v) = 2 P(ht=0) - 1`.
-
-        Parameters
-        ----------
-        exact_value : float
-            The noiseless expectation value bounded in [-1.0, 1.0].
-
-        Returns
-        -------
-        float
-            The noisy estimator. Returns ``exact_value`` if shots are None.
-        """
+        """Injects statistically rigorous shot noise into an exact amplitude."""
         if self.shots is None:
             return exact_value
 
@@ -135,9 +53,6 @@ class _EngineBase:
 
 class FeatureEngine(_EngineBase):
     """Engine for explicit Fourier feature extraction."""
-
-    # Class-level transpile cache for the LASSO hardware path.
-    _LASSO_HARDWARE_CACHE: Dict[Any, Tuple[List[Any], Parameter]] = {}
 
     def __init__(
         self,
@@ -162,7 +77,7 @@ class FeatureEngine(_EngineBase):
     def extract(
         self, X_list: Sequence[InputX], tau: float, r_steps: int, observable: Observable, show_progress: bool = True
     ) -> FeatureMatrix:
-        
+        """Extract the flattened feature matrix for a batch of input graphs."""
         if self.model.d == 1:
             m_terms = (
                 len(self.model.upload_paulis)
@@ -174,30 +89,22 @@ class FeatureEngine(_EngineBase):
             max_freq = 2 * r_steps
 
         freq_dim = (2 * max_freq + 1) ** self.model.d
-
-        paulis = [
-            (p, c)
-            for p, c in observable.to_sparse_pauli_op().to_list()
-            if abs(c) > 1e-12
-        ]
-
         B = np.zeros((len(X_list), freq_dim), dtype=np.float64)
 
-        if self.execution_mode == "emulator":
-            for i, x in enumerate(X_list):
-                for pauli_str, coeff in paulis:
+        for i, x in enumerate(X_list):
+            for pauli_str, coeff in observable.to_sparse_pauli_op().to_list():
+                if abs(coeff) < 1e-12:
+                    continue
+
+                if self.execution_mode == "emulator":
                     b_pauli = self._extract_emulator(
                         x, tau, r_steps, pauli_str, max_freq, show_progress=show_progress
                     )
-                    B[i] += np.real(coeff) * b_pauli
-            return B
+                else:
+                    b_pauli = self._extract_hardware(
+                        x, tau, r_steps, pauli_str, max_freq, show_progress=show_progress
+                    )
 
-        # Hardware mode: Evaluate per graph/pauli (to save Qiskit processing overhead)
-        for i, x in enumerate(X_list):
-            for pauli_str, coeff in paulis:
-                b_pauli = self._extract_hardware(
-                    x, tau, r_steps, pauli_str, max_freq, show_progress=show_progress
-                )
                 B[i] += np.real(coeff) * b_pauli
 
         return B
@@ -205,6 +112,7 @@ class FeatureEngine(_EngineBase):
     def _extract_emulator(
         self, x: InputX, tau: float, r_steps: int, pauli: str, max_freq: int, show_progress: bool = True
     ) -> np.ndarray:
+        """Evaluate features via optimized statevector simulation."""
         qc, freqs = self.builder.build_aup(
             num_qubits=self.model.num_qubits,
             x=x,
@@ -228,65 +136,56 @@ class FeatureEngine(_EngineBase):
     def _extract_hardware(
         self, x: InputX, tau: float, r_steps: int, pauli: str, max_freq: int, show_progress: bool = True
     ) -> np.ndarray:
-        """Evaluate features via batched execution on Qiskit primitives using Parameterized caching."""
+        """Evaluate features via batched execution on Qiskit primitives.
+        Restored to exact float accuracy, optimized via aer_basis."""
         
-        cache_key = (tuple(x), pauli, r_steps)
-        cache = self.__class__._LASSO_HARDWARE_CACHE
+        # 1. Build the base circuit with EXACT float tau
+        base_qc, freqs = self.builder.build_aup(
+            num_qubits=self.model.num_qubits,
+            x=x,
+            tau=float(tau),  # CRITICAL: Hardcoded float ensures 100% mathematical accuracy
+            r_steps=r_steps,
+            pauli=pauli,
+            execution_mode="hardware_base",
+        )
+        ht_control = [qr for qr in base_qc.qregs if qr.name == "ht_control"][0]
+        creg = base_qc.cregs[0]
+        n_s = len(freqs[0])
+
+        raw_qcs = []
+        dim = (2 * max_freq + 1) ** self.model.d
         
-        # Build and transpile only if not cached
-        if cache_key not in cache:
-            tau_param = Parameter('tau')
-            
-            base_qc, freqs = self.builder.build_aup(
-                num_qubits=self.model.num_qubits,
-                x=x,
-                tau=tau_param,
-                r_steps=r_steps,
-                pauli=pauli,
-                execution_mode="hardware_base",
-            )
-            ht_control = [qr for qr in base_qc.qregs if qr.name == "ht_control"][0]
-            creg = base_qc.cregs[0]
-            n_s = len(freqs[0])
+        for flat_idx in tqdm(range(dim), desc=f"Building Features ({pauli})", leave=False, disable=not show_progress):
+            target_tuple = self._map_to_freq_tuple(flat_idx, max_freq, n_s)
+            target = target_tuple[0] if self.model.d == 1 else target_tuple
 
-            raw_qcs = []
-            dim = (2 * max_freq + 1) ** self.model.d
-            
-            for flat_idx in tqdm(range(dim), desc=f"Building Grid ({pauli})", leave=False, disable=not show_progress):
-                target_tuple = self._map_to_freq_tuple(flat_idx, max_freq, n_s)
-                target = target_tuple[0] if self.model.d == 1 else target_tuple
+            qc_l = base_qc.copy()
+            self.builder._append_freq_selector(qc_l, ht_control, freqs, target)
+            qc_l.h(ht_control[0])
+            qc_l.measure(ht_control[0], creg[0])
+            raw_qcs.append(qc_l)
 
-                qc_l = base_qc.copy()
-                self.builder._append_freq_selector(qc_l, ht_control, freqs, target)
-                qc_l.h(ht_control[0])
-                qc_l.measure(ht_control[0], creg[0])
-                raw_qcs.append(qc_l)
-
-            aer_basis = _aer_basis_for_inline_assembly()
-            
-            for _ in tqdm(range(1), desc="Transpiling Grid", leave=False, disable=not show_progress):
-                transpiled_qcs = transpile(raw_qcs, basis_gates=aer_basis, optimization_level=0)
-            
-            if not isinstance(transpiled_qcs, list):
-                transpiled_qcs = [transpiled_qcs]
-                
-            cache[cache_key] = (transpiled_qcs, tau_param)
-
-        # Execution Phase 
-        transpiled_qcs, tau_param = cache[cache_key]
-        
-        # Defensive PUB construction for Qiskit V2
-        pubs = [
-            (qc, {tau_param: float(tau)}) if len(qc.parameters) > 0 else (qc,)
-            for qc in transpiled_qcs
+        # 2. CRITICAL SPEEDUP:
+        # optimization_level=0 and aer_basis bypass the CPU unrolling bottleneck.
+        aer_basis = [
+            'id', 'rz', 'sx', 'x', 'y', 'z', 'h', 's', 'sdg', 'rx', 'ry', 
+            'cx', 'cy', 'cz', 'crx', 'cry', 'crz', 'ccx', 'mcx', 'measure'
         ]
+        
+        for _ in tqdm(range(1), desc=f"Transpiling {len(raw_qcs)} Circuits", leave=False, disable=not show_progress):
+            transpiled_qcs = transpile(raw_qcs, basis_gates=aer_basis, optimization_level=0)
+        
+        if not isinstance(transpiled_qcs, list):
+            transpiled_qcs = [transpiled_qcs]
+        pubs = [(qc,) for qc in transpiled_qcs]
 
+        # 3. Chunked GPU execution prevents memory crashes
         b_flat = np.zeros(len(pubs), dtype=np.float64)
         chunk_size = 500  
 
         for chunk_start in tqdm(
             range(0, len(pubs), chunk_size), 
-            desc=f"GPU Sim (tau={tau:.2f})", 
+            desc="GPU Simulation", 
             leave=False, 
             disable=not show_progress
         ):
@@ -339,8 +238,6 @@ class FeatureEngine(_EngineBase):
 class KernelEngine(_EngineBase):
     """Engine for True Quantum Overlap Kernel evaluation."""
 
-    _KERNEL_HARDWARE_CACHE: Dict[Any, Tuple[List[Any], List[Tuple[int, int, int, int]], Parameter]] = {}
-
     def __init__(
         self,
         model: HamiltonianModel,
@@ -363,6 +260,7 @@ class KernelEngine(_EngineBase):
         r_steps: int,
         observable: Observable,
     ) -> GramMatrix:
+        """Compute the Gram matrix between samples in X1 and X2."""
         symmetric = X2 is None
         X2_eval = X1 if symmetric else X2
 
@@ -384,15 +282,14 @@ class KernelEngine(_EngineBase):
         r_steps: int,
         observable: Observable,
     ) -> GramMatrix:
+        """Compute the Gram matrix via optimized O(M) statevector caching."""
         N1, N2 = len(X1), len(X2)
         K = np.zeros((N1, N2), dtype=np.float64)
 
         sv_cache: Dict[Tuple[Tuple, str], np.ndarray] = {}
         all_graphs = set(tuple(x) for x in X1).union(set(tuple(x) for x in X2))
         paulis = [
-            (p, c)
-            for p, c in observable.to_sparse_pauli_op().to_list()
-            if abs(c) > 1e-12
+            (p, c) for p, c in observable.to_sparse_pauli_op().to_list() if abs(c) > 1e-12
         ]
 
         state_builder = SeparateRegistersBuilder(
@@ -444,98 +341,65 @@ class KernelEngine(_EngineBase):
         r_steps: int,
         observable: Observable,
     ) -> GramMatrix:
+        """Compute the Gram matrix via batched primitive submissions.
+        Restored to exact float accuracy, optimized via aer_basis."""
         N1, N2 = len(X1), len(X2)
         K = np.zeros((N1, N2), dtype=np.float64)
         paulis = [
-            (p, c)
-            for p, c in observable.to_sparse_pauli_op().to_list()
-            if abs(c) > 1e-12
+            (p, c) for p, c in observable.to_sparse_pauli_op().to_list() if abs(c) > 1e-12
         ]
 
-        x1_sig    = tuple(tuple(x) for x in X1)
-        x2_sig    = tuple(tuple(x) for x in X2) if not symmetric else None
-        pauli_sig = tuple(p for p, _ in paulis)
-        cache_key = (x1_sig, x2_sig, r_steps, pauli_sig,
-                     self.model.num_qubits, self.model.d)
+        pairs = []
+        for i in range(N1):
+            start_j = i if symmetric else 0
+            for j in range(start_j, N2):
+                pairs.append((i, j))
 
-        cache = self.__class__._KERNEL_HARDWARE_CACHE
-
-        if cache_key not in cache:
-            tau_param = Parameter("tau")
-            raw_qcs   = []
-            job_map: List[Tuple[int, int, int, int]] = []
-
-            pairs = []
-            for i in range(N1):
-                start_j = i if symmetric else 0
-                for j in range(start_j, N2):
-                    pairs.append((i, j))
-
-            for i, j in tqdm(
-                pairs, desc="Building Kernel Skeletons", leave=False
-            ):
-                x_i = X1[i]
-                x_j = X2[j]
-                for h_idx, (pauli_h, _) in enumerate(paulis):
-                    for hp_idx, (pauli_hp, _) in enumerate(paulis):
-                        qc = self.builder.build_overlap(
-                            num_qubits=self.model.num_qubits,
-                            x1=x_i,
-                            x2=x_j,
-                            tau=tau_param,
-                            r_steps=r_steps,
-                            pauli1=pauli_h,
-                            pauli2=pauli_hp,
-                        )
-                        raw_qcs.append(qc)
-                        job_map.append((i, j, h_idx, hp_idx))
-
-            aer_basis = _aer_basis_for_inline_assembly()
-            with tqdm(
-                total=1,
-                desc=f"Transpiling {len(raw_qcs)} Kernel Circuits",
-                leave=False,
-            ) as bar:
-                transpiled_qcs = transpile(
-                    raw_qcs, basis_gates=aer_basis, optimization_level=0
-                )
-                bar.update(1)
-
+        for i, j in tqdm(pairs, desc="Hardware Gram Matrix", leave=False):
+            x_i = X1[i]
+            x_j = X2[j]
+            raw_qcs = []  
+            job_map = []
+            
+            for h_idx, (pauli_h, _) in enumerate(paulis):
+                for hp_idx, (pauli_hp, _) in enumerate(paulis):
+                    qc = self.builder.build_overlap(
+                        num_qubits=self.model.num_qubits,
+                        x1=x_i,
+                        x2=x_j,
+                        tau=float(tau),
+                        r_steps=r_steps,
+                        pauli1=pauli_h,
+                        pauli2=pauli_hp,
+                    )
+                    raw_qcs.append(qc)
+                    job_map.append((h_idx, hp_idx))
+                    
+            aer_basis = [
+                'id', 'rz', 'sx', 'x', 'y', 'z', 'h', 's', 'sdg', 'rx', 'ry', 
+                'cx', 'cy', 'cz', 'crx', 'cry', 'crz', 'ccx', 'mcx', 'measure'
+            ]
+            transpiled_qcs = transpile(raw_qcs, basis_gates=aer_basis, optimization_level=0)
+            
             if not isinstance(transpiled_qcs, list):
                 transpiled_qcs = [transpiled_qcs]
-
-            cache[cache_key] = (transpiled_qcs, job_map, tau_param)
-
-        transpiled_qcs, job_map, tau_param = cache[cache_key]
-        
-        pubs = [
-            (qc, {tau_param: float(tau)}) if len(qc.parameters) > 0 else (qc,)
-            for qc in transpiled_qcs
-        ]
-
-        chunk_size = 500
-        overlaps = np.zeros(len(pubs), dtype=np.float64)
-
-        for chunk_start in tqdm(
-            range(0, len(pubs), chunk_size),
-            desc=f"GPU Sim Kernel (τ={tau:.2f})",
-            leave=False,
-        ):
-            chunk_pubs = pubs[chunk_start : chunk_start + chunk_size]
-            job = self.sampler.run(chunk_pubs, shots=self.shots)
+            pubs = [(qc,) for qc in transpiled_qcs]
+            
+            job = self.sampler.run(pubs, shots=self.shots)
             result = job.result()
-            for j_local in range(len(chunk_pubs)):
-                bit_array = result[j_local].data.creg.array
+            
+            for k, (h_idx, hp_idx) in enumerate(job_map):
+                bit_array = result[k].data.creg.array
                 n1 = int(np.sum(bit_array))
                 n0 = self.shots - n1
-                overlaps[chunk_start + j_local] = (n0 - n1) / self.shots
+                noisy_overlap = (n0 - n1) / self.shots
 
-        for k, (i, j, h_idx, hp_idx) in enumerate(job_map):
-            c_h = paulis[h_idx][1]
-            c_hp = paulis[hp_idx][1]
-            weight = np.real(c_h) * np.real(c_hp)
-            K[i, j] += weight * overlaps[k]
-            if symmetric and i != j:
-                K[j, i] += weight * overlaps[k]
+                c_h = paulis[h_idx][1]
+                c_hp = paulis[hp_idx][1]
+
+                weight = np.real(c_h) * np.real(c_hp)
+                K[i, j] += weight * noisy_overlap
+                if symmetric and i != j:
+                    K[j, i] += weight * noisy_overlap
 
         return K

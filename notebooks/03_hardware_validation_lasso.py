@@ -96,8 +96,9 @@ from qiskit_aer.primitives import SamplerV2 as AerSamplerV2
 optimized_gpu_sim = AerSimulator(
     method="statevector",
     device="GPU",
-    precision="single",  # CRITICAL: Use single precision to save VRAM on mega-batches
-    batched_shots_gpu=True # Tells Aer to aggressively batch shots on the GPU
+    precision="single",
+    max_parallel_experiments=0,
+    # batched_shots_gpu=True   ← keep OFF, as 0a92ba8 established
 )
 
 sampler = AerSamplerV2.from_backend(optimized_gpu_sim)
